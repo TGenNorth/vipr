@@ -46,15 +46,16 @@ type Match struct {
 }
 
 func (m *Match) Write(w io.Writer) {
+	fmt.Fprintf(w, "%s %d %d\n", m.contig.identifier, m.forwardIndices, m.reverseIndices)
 	for _, fIdx := range m.forwardIndices {
 		for _, rIdx := range m.reverseIndices {
 			if rIdx < fIdx || rIdx-fIdx > 500 {
 				//if rIdx < fIdx {
 				continue
 			}
-			fmt.Printf("sequence %d fwd %s %d rev %s %d allele %d\n", len(m.contig.sequence), m.primer.forward, fIdx, m.primer.reverse, rIdx, rIdx-fIdx)
-			fmt.Fprintf(w, "%s\t%s\t%s\n", m.primer.forward, m.primer.reverse, m.contig.sequence[fIdx:rIdx+len(m.primer.reverse)])
-			fmt.Fprintf(w, "%s\t%s\n", m.contig.sequence[fIdx:fIdx+len(m.primer.forward)], m.contig.sequence[rIdx+1:rIdx+1+len(m.primer.reverse)])
+			//fmt.Printf("%s sequence %d fwd %s %d rev %s %d allele %d\n", m.contig.identifier, len(m.contig.sequence), m.primer.forward, fIdx, m.primer.reverse, rIdx, rIdx-fIdx)
+			fmt.Fprintf(w, "%s\t%s\t%d\t%d\t%s\n", m.primer.forward, m.primer.reverse, rIdx, fIdx, m.contig.sequence[fIdx:rIdx+len(m.primer.reverse)])
+			fmt.Fprintf(w, "%s\t%s\n", m.contig.sequence[fIdx:fIdx+len(m.primer.forward)], m.contig.sequence[rIdx:rIdx+len(m.primer.reverse)])
 		}
 	}
 }
@@ -175,59 +176,7 @@ func main() {
 		log.Println("Shutdown index WaitGroup")
 	}(indexChan, sequenceChan)
 
-	go func(matchChan chan []Match, indexChan chan *Contig, primers PrimerList) {
-		defer close(matchChan)
-		var wg sync.WaitGroup
-		wg.Add(threads)
-		for i := 0; i < threads; i++ {
-			go func(matchChan chan<- []Match, indexChan <-chan *Contig, primers PrimerList, i int) {
-				defer wg.Done()
-				for contig := range indexChan {
-					log.Printf("Start match %s %d/%d\n", contig.identifier, len(indexChan), cap(indexChan))
-					start := time.Now()
-
-					var forwardIndices, reverseIndices []int
-
-					var matches []Match
-
-					for _, primer := range primers {
-						log.Printf("Lookup %s %s %s\n", contig.identifier, primer.forward, primer.reverse)
-						for _, forwardPrimer := range primer.forwardExpanded {
-							forwardIndices = append(forwardIndices, contig.index.Lookup(forwardPrimer, -1)...)
-						}
-						// No point in searching for reverse primers if the forward primer didn't match
-						if len(forwardIndices) == 0 {
-							forwardIndices = nil
-							continue
-						}
-						for _, reversePrimer := range primer.reverseExpanded {
-							reverseIndices = append(reverseIndices, contig.index.Lookup(reversePrimer, -1)...)
-						}
-						// No point in reporting match if the reverse primer didn't match
-						if len(reverseIndices) == 0 {
-							reverseIndices = nil
-							continue
-						}
-						matches = append(matches, Match{
-							contig:         contig,
-							primer:         &primer,
-							forwardIndices: forwardIndices,
-							reverseIndices: reverseIndices,
-						})
-					}
-
-					matchChan <- matches
-
-					log.Printf("End match %s %d %fs\n", contig.identifier, len(contig.sequence), time.Since(start).Seconds())
-				}
-				log.Printf("Shutdown match worker %d\n", i)
-			}(matchChan, indexChan, primers, i)
-
-		}
-
-		wg.Wait()
-		log.Println("Shutdown match WaitGroup")
-	}(matchChan, indexChan, primers)
+	go matchWorker(matchChan, indexChan, primers, threads)
 
 	//matches := make(map[string]map[int]struct{})
 	f := bufio.NewWriter(os.Stdout)
@@ -237,6 +186,62 @@ func main() {
 			match.Write(f)
 		}
 	}
+}
+
+func matchWorker(matchChan chan []Match, indexChan chan *Contig, primers PrimerList, threads int) {
+	defer close(matchChan)
+	var wg sync.WaitGroup
+	wg.Add(threads)
+	for i := 0; i < threads; i++ {
+		go func(matchChan chan<- []Match, indexChan <-chan *Contig, primers PrimerList, i int) {
+			defer wg.Done()
+			for contig := range indexChan {
+				log.Printf("Start match %s %d/%d\n", contig.identifier, len(indexChan), cap(indexChan))
+				start := time.Now()
+
+				var forwardIndices, reverseIndices []int
+
+				var matches []Match
+
+				for i, primer := range primers {
+					log.Printf("Lookup %s %s %s\n", contig.identifier, primer.forward, primer.reverse)
+					for _, forwardPrimer := range primer.forwardExpanded {
+						forwardIndices = append(forwardIndices, contig.index.Lookup(forwardPrimer, -1)...)
+					}
+					// No point in searching for reverse primers if the forward primer didn't match
+					if len(forwardIndices) == 0 {
+						forwardIndices = nil
+						continue
+					}
+					for _, reversePrimer := range primer.reverseExpanded {
+						reverseIndices = append(reverseIndices, contig.index.Lookup(reversePrimer, -1)...)
+					}
+					// No point in reporting match if the reverse primer didn't match
+					if len(reverseIndices) == 0 {
+						reverseIndices = nil
+						continue
+					}
+
+					log.Printf("fwd: %s %s\n", primer.forward, bytes.Join(primer.forwardExpanded, []byte(",")))
+					matches = append(matches, Match{
+						contig:         contig,
+						primer:         &primers[i],
+						forwardIndices: forwardIndices,
+						reverseIndices: reverseIndices,
+					})
+				}
+
+				matchChan <- matches
+
+				log.Printf("End match %s %d %fs\n", contig.identifier, len(contig.sequence), time.Since(start).Seconds())
+			}
+			log.Printf("Shutdown match worker %d\n", i)
+		}(matchChan, indexChan, primers, i)
+
+	}
+
+	wg.Wait()
+	log.Println("Shutdown match WaitGroup")
 }
 
 type Primer struct {
@@ -267,7 +272,6 @@ func (p Primer) expandDegeneratePosition(primers [][]byte, position int, l ...by
 			copy(p, primers[j])
 			p[position] = m
 			primers = append(primers, p)
-			log.Printf("%s\n", primers)
 		}
 	}
 	return primers
@@ -353,6 +357,7 @@ func (p *PrimerList) Read(r io.Reader) error {
 	log.Println("Building all forward/reverse primer combinations")
 	for _, forwardPrimer := range forwardPrimers {
 		for _, reversePrimer := range reversePrimers {
+			log.Printf("%s\t%s\n", forwardPrimer, reversePrimer)
 			*p = append(*p, NewPrimer(forwardPrimer, reversePrimer))
 		}
 	}
@@ -364,3 +369,12 @@ func (p *PrimerList) Read(r io.Reader) error {
 
 	return nil
 }
+
+/*
+func reverseComplement(b []byte) []byte {
+	rc := make([]byte, b)
+	for _, c := range b {
+		rc[i] = reverseComplementTable[c]
+	}
+}
+*/

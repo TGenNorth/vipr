@@ -37,26 +37,45 @@ func TestExpandDegeneratePrimer(t *testing.T) {
 
 func TestNewPrimer(t *testing.T) {
 	var testtable = []struct {
-		in  []string
-		out []string
+		forward         string
+		reverse         string
+		forwardExpanded []string
+		reverseExpanded []string
 	}{
-		{[]string{"TGTTAGGTAATCCAACTMGCACYT", "GATGGAGGACTCGTWYGCTTGT"}, []string{""}},
+		{
+			forward:         "TGTTAGGTAATCCAACTMGCACYT",
+			reverse:         "GATGGAGGACTCGTWYGCTTGT",
+			forwardExpanded: []string{"TGTTAGGTAATCCAACTAGCACCT", "TGTTAGGTAATCCAACTCGCACCT", "TGTTAGGTAATCCAACTAGCACTT", "TGTTAGGTAATCCAACTCGCACTT"},
+			reverseExpanded: []string{"GATGGAGGACTCGTACGCTTGT", "GATGGAGGACTCGTTCGCTTGT", "GATGGAGGACTCGTATGCTTGT", "GATGGAGGACTCGTTTGCTTGT"},
+		},
 	}
 	for _, tt := range testtable {
-		primer := NewPrimer([]byte(tt.in[0]), []byte(tt.in[1]))
-		if !bytes.Equal([]byte(tt.in[0]), primer.forward) {
-			t.Errorf("NewPrimer(%s, %s) => primer.forward %s, expected %s\n", tt.in[0], tt.in[1], primer.forward, []byte(tt.in[0]))
+		primer := NewPrimer([]byte(tt.forward), []byte(tt.reverse))
+		if !bytes.Equal([]byte(tt.forward), primer.forward) {
+			t.Errorf("NewPrimer(%s, %s) => primer.forward %s, expected %s\n", tt.forward, tt.reverse, primer.forward, tt.forward)
 		}
-		if !bytes.Equal([]byte(tt.in[1]), primer.reverse) {
-			t.Errorf("NewPrimer(%s, %s) => primer.forward %s, expected %s\n", tt.in[0], tt.in[1], primer.reverse, []byte(tt.in[1]))
+		if !bytes.Equal([]byte(tt.reverse), primer.reverse) {
+			t.Errorf("NewPrimer(%s, %s) => primer.reverse %s, expected %s\n", tt.forward, tt.reverse, primer.reverse, tt.reverse)
 		}
-		/*if len(primers) != len(tt.out) {
-			t.Fatalf("expandPrimerDegeneracies(%s) => %d primers %s, expected %d %s\n", tt.in, len(primers), primers, len(tt.out), tt.out)
+		if len(primer.forwardExpanded) != len(tt.forwardExpanded) {
+			t.Errorf("NewPrimer(%s, %s) => %d primer.forwardExpanded %s, expected %d %s\n", tt.forward, tt.reverse, len(primer.forwardExpanded), primer.forwardExpanded, len(tt.forwardExpanded), tt.forwardExpanded)
 		}
-		for i := range tt.out {
-			if !bytes.Equal(primers[i], tt.out[i]) {
-				t.Errorf("expandPrimerDegeneracies(%s) => primer #%d %s, expected %s\n", tt.in, i, primers[i], tt.out[i])
+		for i := range tt.forwardExpanded {
+			if !bytes.Equal([]byte(tt.forwardExpanded[i]), primer.forwardExpanded[i]) {
+				t.Errorf("NewPrimer(%s, %s) => #%d primer.forwardExpanded %s, expected %s\n", tt.forward, tt.reverse, i, primer.forwardExpanded[i], tt.forwardExpanded[i])
 			}
-		}*/
+		}
+		if len(primer.reverseExpanded) != len(tt.reverseExpanded) {
+			t.Errorf("NewPrimer(%s, %s) => %d primer.reverseExpanded %s, expected %d %s\n", tt.reverse, tt.reverse, len(primer.reverseExpanded), primer.reverseExpanded, len(tt.reverseExpanded), tt.reverseExpanded)
+		}
+		for i := range tt.reverseExpanded {
+			if !bytes.Equal([]byte(tt.reverseExpanded[i]), primer.reverseExpanded[i]) {
+				t.Errorf("NewPrimer(%s, %s) => #%d primer.reverseExpanded %s, expected %s\n", tt.reverse, tt.reverse, i, primer.reverseExpanded[i], tt.reverseExpanded[i])
+			}
+		}
 	}
+}
+
+func TestMatchWorker(t *testing.T) {
+
 }
