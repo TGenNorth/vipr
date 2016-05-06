@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-func TestExpandDegeneratePrimer(t *testing.T) {
+/*func TestExpandDegeneratePrimer(t *testing.T) {
 	var testtable = []struct {
 		in  []byte
 		out [][]byte
@@ -74,8 +74,57 @@ func TestNewPrimer(t *testing.T) {
 			}
 		}
 	}
-}
+}*/
 
 func TestMatchWorker(t *testing.T) {
 
+}
+
+func TestReverseComplement(t *testing.T) {
+	var testtable = []struct {
+		in  []byte
+		out []byte
+	}{
+		{[]byte(""), []byte("")},
+		{[]byte("GATC"), []byte("GATC")},
+		{[]byte("ACGTUMRWSYKVHDBN"), []byte("NVHDBMRSWYKAACGT")},
+		{[]byte("GKTARGTAATCCAACTAGCACCT"), []byte("AGGTGCTAGTTGGATTACYTAMC")},
+	}
+
+	for _, tt := range testtable {
+		rc := reverseComplement(tt.in)
+		if !bytes.Equal(tt.out, rc) {
+			t.Errorf("reverseComplement(%s) => %s, expected %s\n", tt.in, rc, tt.out)
+		}
+	}
+}
+
+func TestReadFasta(t *testing.T) {
+	identifier := "Hello World"
+	// 5000 was chosen as a value larger than the default buffer size
+	s := make([]byte, 5000)
+	for i := range s {
+		s[i] = 'A'
+	}
+	copy(s[:], ">"+identifier+"\n")
+	ch := make(chan *Contig)
+	go readFasta(ch, bytes.NewReader(s))
+	select {
+	case contig, ok := <-ch:
+		if !ok {
+			t.Fatalf("readFasta channel was closed reading the first contig")
+		}
+		if contig.identifier != identifier {
+			t.Errorf("readFasta() => identifier %s, expected %s", contig.identifier)
+		}
+		if len(contig.sequence) != 5000-len(identifier)+2 {
+			t.Errorf("readFasta() => sequence length %d, expected %d", len(contig.sequence), 5000-len(identifier)+2)
+		}
+	default:
+		t.Fatalf("readFasta channel was blocked reading the first contig")
+	}
+	select {
+	case contig, ok := <-ch:
+		t.Errorf("%#v, %#v", contig, ok)
+	}
 }
