@@ -2,10 +2,11 @@ package main
 
 import (
 	"bytes"
+	"reflect"
 	"testing"
 )
 
-/*func TestExpandDegeneratePrimer(t *testing.T) {
+func TestExpandDegenerateSequence(t *testing.T) {
 	var testtable = []struct {
 		in  []byte
 		out [][]byte
@@ -21,9 +22,8 @@ import (
 		{[]byte("SATS"), [][]byte{[]byte("GATG"), []byte("CATG"), []byte("GATC"), []byte("CATC")}},
 		{[]byte("TGTTAGGTAATCCAACTMGCACYT"), [][]byte{[]byte("TGTTAGGTAATCCAACTAGCACCT"), []byte("TGTTAGGTAATCCAACTCGCACCT"), []byte("TGTTAGGTAATCCAACTAGCACTT"), []byte("TGTTAGGTAATCCAACTCGCACTT")}},
 	}
-	p := Primer{}
 	for _, tt := range testtable {
-		primers := p.expandDegeneratePrimer(tt.in)
+		primers := expandDegenerateSequence(tt.in)
 		if len(primers) != len(tt.out) {
 			t.Fatalf("expandPrimerDegeneracies(%s) => %d primers %s, expected %d %s\n", tt.in, len(primers), primers, len(tt.out), tt.out)
 		}
@@ -35,7 +35,7 @@ import (
 	}
 }
 
-func TestNewPrimer(t *testing.T) {
+/*func TestNewPrimer(t *testing.T) {
 	var testtable = []struct {
 		forward         string
 		reverse         string
@@ -84,47 +84,189 @@ func TestReverseComplement(t *testing.T) {
 	var testtable = []struct {
 		in  []byte
 		out []byte
+		err error
 	}{
-		{[]byte(""), []byte("")},
-		{[]byte("GATC"), []byte("GATC")},
-		{[]byte("ACGTUMRWSYKVHDBN"), []byte("NVHDBMRSWYKAACGT")},
-		{[]byte("GKTARGTAATCCAACTAGCACCT"), []byte("AGGTGCTAGTTGGATTACYTAMC")},
+		{[]byte(""), []byte(""), nil},
+		{[]byte("GATC"), []byte("GATC"), nil},
+		{[]byte("ACGTUMRWSYKVHDBN"), []byte("NVHDBMRSWYKAACGT"), nil},
+		{[]byte("GKTARGTAATCCAACTAGCACCT"), []byte("AGGTGCTAGTTGGATTACYTAMC"), nil},
+		{[]byte("GATQ"), nil, ErrInvalidSequence("unrecognized nucleotide 'Q' at index 3 in sequence \"GATQ\"")},
+		// FIXME: should it handle mixed-case?
+		//{[]byte("gatq"), nil, ErrInvalidSequence("unrecognized nucleotide 'q' at index 3 in sequence GATQ")},
 	}
 
 	for _, tt := range testtable {
-		rc := reverseComplement(tt.in)
-		if !bytes.Equal(tt.out, rc) {
-			t.Errorf("reverseComplement(%s) => %s, expected %s\n", tt.in, rc, tt.out)
+		if rc, err := reverseComplement(tt.in); err != tt.err || !bytes.Equal(tt.out, rc) {
+			t.Errorf("reverseComplement(%q) => %q, %q expected %q, %q\n", tt.in, rc, err, tt.out, tt.err)
 		}
 	}
 }
 
 func TestReadFasta(t *testing.T) {
-	identifier := "Hello World"
+	descriptor := "ContigA"
 	// 5000 was chosen as a value larger than the default buffer size
 	s := make([]byte, 5000)
 	for i := range s {
 		s[i] = 'A'
 	}
-	copy(s[:], ">"+identifier+"\n")
+	copy(s[:], ">"+descriptor+"\n")
 	ch := make(chan *Contig)
 	go readFasta(ch, bytes.NewReader(s))
-	select {
+
+	contig, ok := <-ch
+
+	if !ok {
+		t.Fatalf("readFasta() channel was closed reading the first contig")
+	}
+	if contig.descriptor != descriptor {
+		t.Errorf("readFasta() => descriptor %s, expected %s", contig.descriptor, descriptor)
+	}
+	if len(contig.sequence) != 5000-len(descriptor)-2 {
+		t.Errorf("readFasta() => sequence length %d, expected %d", len(contig.sequence), 5000-len(descriptor)-2)
+	}
+
+	// FIXME: this test could lock
+	contig, ok = <-ch
+	if ok {
+		t.Fatalf("readFasta() channel returned an unexpected contig: %s", contig)
+	}
+	/*select {
 	case contig, ok := <-ch:
 		if !ok {
 			t.Fatalf("readFasta channel was closed reading the first contig")
 		}
-		if contig.identifier != identifier {
-			t.Errorf("readFasta() => identifier %s, expected %s", contig.identifier)
+		if contig.descriptor != descriptor {
+			t.Errorf("readFasta() => descriptor %s, expected %s", contig.descriptor, descriptor)
 		}
-		if len(contig.sequence) != 5000-len(identifier)+2 {
-			t.Errorf("readFasta() => sequence length %d, expected %d", len(contig.sequence), 5000-len(identifier)+2)
+		if len(contig.sequence) != 5000-len(descriptor)+2 {
+			t.Errorf("readFasta() => sequence length %d, expected %d", len(contig.sequence), 5000-len(descriptor)+2)
 		}
 	default:
-		t.Fatalf("readFasta channel was blocked reading the first contig")
+		//t.Fatalf("readFasta channel was blocked reading the first contig")
 	}
 	select {
 	case contig, ok := <-ch:
 		t.Errorf("%#v, %#v", contig, ok)
+	}*/
+}
+
+func TestPrimerListRead(t *testing.T) {
+	t.SkipNow()
+
+	twoPrimerList := PrimerList{
+		forward: []Primer{
+			Primer{
+				Label:    []byte("gatc"),
+				Sequence: []byte("GATC"),
+			},
+		},
+		reverse: []Primer{
+			Primer{
+				Label:    []byte("ctag"),
+				Sequence: []byte("CTAG"),
+			},
+		},
+	}
+
+	labeledTwoPrimerList := PrimerList{
+		forward: []Primer{
+			Primer{
+				Label:    []byte("ForwardPrimerLabel"),
+				Sequence: []byte("GATC"),
+			},
+		},
+		reverse: []Primer{
+			Primer{
+				Label:    []byte("ReversePrimerLabel"),
+				Sequence: []byte("CTAG"),
+			},
+		},
+	}
+
+	var testtable = []struct {
+		in  string
+		out PrimerList
+		err error
+	}{
+		// It should require at least one forward and one reverse primer sequence.
+		// It should accept any sequence iff it is composed of the nucleic acid notation character set.
+		// It should accept an optional primer descriptor in the UTF-8 character set following the primer sequence.
+		// It should use the primer sequence as an descriptor if a primer descriptor is absent.
+		// It should not modify the descriptor.
+		{
+			// empty file base case
+			in:  "",
+			out: PrimerList{},
+			err: ErrInvalidFormat("at least one forward and one reverse primer sequence is required"),
+		}, {
+			in:  "gatc",
+			out: PrimerList{},
+			err: ErrInvalidFormat("at least one forward and one reverse primer sequence is required"),
+		}, {
+			// *nix line ending
+			in:  "gatc\ngatc",
+			out: PrimerList{},
+			err: ErrInvalidFormat("at least one forward and one reverse primer sequence is required"),
+		}, {
+			// windows line ending
+			in:  "gatc\r\ngatc",
+			out: PrimerList{},
+			err: ErrInvalidFormat("at least one forward and one reverse primer sequence is required"),
+		},
+		// It should require at least one blank line delimiter between the forward and reverse primer lists
+		// It should t the number of delimiters
+		{
+			in:  "gatc\n\nctag",
+			out: twoPrimerList,
+			err: nil,
+		}, {
+			in:  "gatc\n\n\nctag",
+			out: twoPrimerList,
+			err: nil,
+		}, {
+			in:  "gAtC\n\ngatc\ngatc",
+			out: PrimerList{},
+			err: nil,
+		}, {
+			in:  "gatc ForwardPrimerLabel\n\nctag ReversePrimerLabel",
+			out: labeledTwoPrimerList,
+			err: nil,
+		}, {
+			in:  "gatc ForwardPrimerLabel\n\n\nctag ReversePrimerLabel",
+			out: labeledTwoPrimerList,
+			err: nil,
+		}, {
+			in:  "gatc ForwardPrimerLabel\n\n\n\nctag ReversePrimerLabel",
+			out: labeledTwoPrimerList,
+			err: nil,
+		}, {
+			in:  "gatc ForwardPrimerLabel\r\n\r\nctag ReversePrimerLabel",
+			out: labeledTwoPrimerList,
+			err: nil,
+		}, {
+			in:  "gatc Primer Label",
+			out: PrimerList{},
+			err: nil,
+		}, {
+			in:  "gatc Primer Label",
+			out: PrimerList{},
+			err: nil,
+		}, {
+			in:  "Primer Label gatc",
+			out: PrimerList{},
+			err: nil,
+		},
+	}
+
+	for _, tt := range testtable {
+		pl := PrimerList{}
+
+		if err := pl.Read(bytes.NewReader([]byte(tt.in))); err != tt.err {
+			t.Errorf("PrimerList.Read(%q) => %q, expected %q", tt.in, err, tt.err)
+		}
+
+		if !reflect.DeepEqual(pl, tt.out) {
+			t.Errorf("PrimerList.Read(%q) => %q, expected %q\n", tt.in, pl, tt.out)
+		}
 	}
 }
