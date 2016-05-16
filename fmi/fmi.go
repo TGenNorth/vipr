@@ -2,6 +2,7 @@ package fmi
 
 import (
 	"bytes"
+	"log"
 	"sort"
 )
 
@@ -35,9 +36,9 @@ type Index struct {
 func New(data []byte) *Index {
 	// TODO: reenable special char
 	//log.Println("reenable append special char")
-	/*if data[len(data)-1] != '$' {
+	if data[len(data)-1] != '$' {
 		data = append(data, '$')
-	}*/
+	}
 	return &Index{
 		data: data,
 		sa:   qsufsort(data),
@@ -97,6 +98,7 @@ func (x *Index) Lookup(query []byte, mismatch int) []int {
 	}
 
 	if mismatch == 0 {
+		// TODO: replace with Index.exact() unless there is a measurable performance gain in this code duplication.
 		// find matching suffix index range [i:j]
 		// find the first index where s would be the prefix
 		i := sort.Search(len(x.sa), func(i int) bool {
@@ -109,6 +111,7 @@ func (x *Index) Lookup(query []byte, mismatch int) []int {
 		return x.sa[i:j]
 	}
 
+	// TODO: Does declaring these variables here instead of the start of the function have a measurable performance gain?
 	var stack []indexQuery
 	var locations []int
 
@@ -166,9 +169,16 @@ func (x *Index) Lookup(query []byte, mismatch int) []int {
 		//stack = append(stack, x.bounds(iq.query[0], indexQuery{
 		var sa []int
 		for i := range sa {
-			if len(x.data)-iq.sa[i] > len(iq.query)+iq.depth-iq.mismatch {
+			if len(x.data)-iq.sa[i] > len(iq.query)+iq.depth+1-iq.mismatch-1 {
 				sa = append(sa, iq.sa[i])
+			} else {
+				if len(x.data)-iq.sa[i]+iq.depth > 50 {
+					log.Printf("%d %s... discard %d\n", len(iq.query), iq.query[:50], iq.sa[i])
+				} else {
+					log.Printf("%d %s discard %d\n", len(iq.query), iq.query, iq.sa[i])
+				}
 			}
+
 		}
 		stack = append(stack, indexQuery{
 			query: iq.query,
@@ -183,8 +193,8 @@ func (x *Index) Lookup(query []byte, mismatch int) []int {
 		// suffix: gtgaatcatcraatytty
 		stack = append(stack, x.bounds(iq.query[0], indexQuery{
 			query:    iq.query,
-			mismatch: iq.mismatch,
 			depth:    iq.depth,
+			mismatch: iq.mismatch,
 			sa:       iq.sa,
 		}))
 
@@ -199,8 +209,8 @@ func (x *Index) Lookup(query []byte, mismatch int) []int {
 			}
 			stack = append(stack, x.bounds(byte(nt), indexQuery{
 				query:    iq.query,
-				mismatch: iq.mismatch - 1,
 				depth:    iq.depth + 1,
+				mismatch: iq.mismatch - 1,
 				sa:       iq.sa,
 			}))
 		}
@@ -256,6 +266,17 @@ func (x *Index) bounds(nt byte, iq indexQuery) indexQuery {
 	// starting at i, find the first index at which s is not a prefix
 	j := i + sort.Search(len(iq.sa)-i, func(j int) bool {
 		idx := iq.sa[j+i] + iq.depth
+		defer func(iq indexQuery, i, j, idx int) {
+			if err := recover(); err != nil {
+				var sa []int
+				for i := range iq.sa[i : i+j+1] {
+					//if len(x.data)-iq.sa[i] > len(iq.query)+iq.depth+1-iq.mismatch {
+					sa = append(sa, len(x.data[iq.sa[i]:]))
+					//}
+				}
+				log.Fatalf("Index.bounds\nquery %s\n%s\n%v\nlen(data) %d len(sa) %d sa[i+j] %d depth %d i %d j %d idx %d\n%s", iq.query, x.data[iq.sa[j+i]:], sa, len(x.data), len(iq.sa), iq.sa[i+j], iq.depth, i, j, idx, err)
+			}
+		}(iq, i, j, idx)
 		return x.data[idx] > nt
 	})
 
@@ -277,6 +298,11 @@ func (x *Index) exact(iq indexQuery) []int {
 	// starting at i, find the first index at which s is not a prefix
 	j := i + sort.Search(len(iq.sa)-i, func(j int) bool {
 		idx := iq.sa[j+i] + iq.depth
+		defer func(iq indexQuery, i, idx int) {
+			if err := recover(); err != nil {
+				log.Fatalf("Index.bounds\n%v\nlen(data) %d len(sa) %d depth %d i %d j %d idx %d\n%s", iq.sa, len(x.data), len(iq.sa), iq.depth, i, j, idx, err)
+			}
+		}(iq, i, idx)
 		return !bytes.HasPrefix(x.data[idx:], iq.query)
 	})
 

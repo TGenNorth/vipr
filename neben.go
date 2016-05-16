@@ -9,8 +9,10 @@ import (
 	"io/ioutil"
 	"path"
 	"unicode"
+
+	"github.com/corburn/neben/fmi"
 	//"github.com/pkg/profile"
-	"index/suffixarray"
+
 	"io"
 	"log"
 	"os"
@@ -21,6 +23,7 @@ import (
 
 var (
 	threadsFlag     uint
+	maxMismatchFlag int
 	maxSequenceFlag int
 	primersFlag     string
 	debugFlag       bool
@@ -28,6 +31,8 @@ var (
 
 func init() {
 	flag.UintVar(&threadsFlag, "threads", 10, "")
+	// TODO: do not allow negative
+	flag.IntVar(&maxMismatchFlag, "max-mismatch", 0, "")
 	flag.IntVar(&maxSequenceFlag, "max-sequence", 200, "")
 	flag.StringVar(&primersFlag, "primers", "", "path to a file with ")
 	flag.BoolVar(&debugFlag, "debug", false, "print log messages to stderr")
@@ -140,7 +145,8 @@ type Contig struct {
 	descriptor string
 	// NOTE: sequence MUST NOT be altered once assigned
 	sequence []byte
-	index    *suffixarray.Index
+	//index    *suffixarray.Index
+	index *fmi.Index
 }
 
 func NewContig(descriptor string) *Contig {
@@ -260,11 +266,11 @@ func (m *ContigMatch) addPrimer(primer Primer, isForward bool) {
 	}
 
 	for _, sequence := range primer.Sequences {
-		primerMatch.indices = append(primerMatch.indices, m.contig.index.Lookup(sequence, -1)...)
+		primerMatch.indices = append(primerMatch.indices, m.contig.index.Lookup(sequence, maxMismatchFlag)...)
 	}
 
 	for _, sequence := range primer.RcSequences {
-		primerMatch.rcIndices = append(primerMatch.rcIndices, m.contig.index.Lookup(sequence, -1)...)
+		primerMatch.rcIndices = append(primerMatch.rcIndices, m.contig.index.Lookup(sequence, maxMismatchFlag)...)
 	}
 
 	if isForward {
@@ -284,7 +290,8 @@ func suffixarrayWorkers(indexChan chan<- Contig, sequenceChan <-chan *Contig, th
 			for contig := range sequenceChan {
 				log.Printf("Start index %s %d/%d\n", contig.descriptor, len(sequenceChan), cap(sequenceChan))
 				start := time.Now()
-				contig.index = suffixarray.New(contig.sequence)
+				//contig.index = suffixarray.New(contig.sequence)
+				contig.index = fmi.New(contig.sequence)
 				indexChan <- *contig
 				log.Printf("End index %s %d %fs\n", contig.descriptor, len(contig.sequence), time.Since(start).Seconds())
 			}
@@ -332,27 +339,42 @@ func matchWorkers(matchChan chan ContigMatch, indexChan <-chan Contig, primers P
 	log.Println("Shutdown match WaitGroup")
 }
 
+// text is an alias for byte because []byte encodes as a base64-encoded string
+type text []byte
+
+func (t text) String() string {
+	return string(t)
+}
+
+func (t text) MarshalJSON() ([]byte, error) {
+	x := make([]byte, len(t)+2)
+	copy(x[1:], t)
+	x[0] = '"'
+	x[len(x)-1] = '"'
+	return x, nil
+}
+
 type Primer struct {
 	// label is an optional description
-	Label []byte `json:"label"`
+	Label text `json:"label"`
 	// sequence is the original sequence with degenerarcies
-	Sequence []byte `json:"sequence"`
+	Sequence text `json:"sequence"`
 	// sequences are the sequence permutations with degeneracies expanded
-	Sequences [][]byte `json:"sequences"`
+	Sequences []text `json:"sequences"`
 	// rcSequences are the reverse complement of sequences
-	RcSequences [][]byte `json:"rcSequences"`
+	RcSequences []text `json:"rcSequences"`
 }
 
 // String is for unit test error messages
 func (p Primer) String() string {
-	s, err := json.Marshal(p)
-	if err != nil {
+	if b, err := json.Marshal(p); err != nil {
 		return err.Error()
+	} else {
+		return string(b)
 	}
-	return string(s)
 }
 
-func expandDegeneratePosition(primers [][]byte, position int, l ...byte) [][]byte {
+func expandDegeneratePosition(primers []text, position int, l ...byte) []text {
 	for j := range primers {
 		primers[j][position] = l[0]
 	}
@@ -368,14 +390,14 @@ func expandDegeneratePosition(primers [][]byte, position int, l ...byte) [][]byt
 	return primers
 }
 
-func expandDegenerateSequence(sequence []byte) [][]byte {
-	var primers [][]byte
+func expandDegenerateSequence(sequence []byte) []text {
+	var primers []text
 
 	if len(sequence) == 0 {
 		return nil
 	}
 
-	primer := make([]byte, len(sequence))
+	primer := make(text, len(sequence))
 	copy(primer, sequence)
 
 	primers = append(primers, primer)
