@@ -108,8 +108,8 @@ func main() {
 		}
 		for _, fwd := range match.forward {
 			for _, rev := range match.reverse {
-				for _, fIdx := range fwd.indices {
-					for _, rIdx := range rev.rcIndices {
+				for fIdx := range fwd.indices {
+					for rIdx := range rev.rcIndices {
 						sequenceLength := rIdx + len(rev.primer.Sequence) - fIdx
 						if fIdx > rIdx || (maxSequenceFlag > 0 && sequenceLength > maxSequenceFlag) {
 							continue
@@ -120,8 +120,8 @@ func main() {
 
 					}
 				}
-				for _, fIdx := range fwd.rcIndices {
-					for _, rIdx := range rev.indices {
+				for fIdx := range fwd.rcIndices {
+					for rIdx := range rev.indices {
 						sequenceLength := fIdx + len(fwd.primer.Sequence) - rIdx
 						if rIdx > fIdx || (maxSequenceFlag > 0 && sequenceLength > maxSequenceFlag) {
 							continue
@@ -232,8 +232,8 @@ func readFasta(sequenceChan chan<- *Contig, r io.Reader) {
 
 type PrimerMatch struct {
 	primer    Primer
-	indices   []int
-	rcIndices []int
+	indices   map[int]struct{}
+	rcIndices map[int]struct{}
 }
 
 func (c PrimerMatch) String() string {
@@ -262,15 +262,21 @@ func (c ContigMatch) String() string {
 
 func (m *ContigMatch) addPrimer(primer Primer, isForward bool) {
 	primerMatch := PrimerMatch{
-		primer: primer,
+		primer:    primer,
+		indices:   make(map[int]struct{}),
+		rcIndices: make(map[int]struct{}),
 	}
 
 	for _, sequence := range primer.Sequences {
-		primerMatch.indices = append(primerMatch.indices, m.contig.index.Lookup(sequence, maxMismatchFlag)...)
+		for _, idx := range m.contig.index.Lookup(sequence, maxMismatchFlag) {
+			primerMatch.indices[idx] = struct{}{}
+		}
 	}
 
 	for _, sequence := range primer.RcSequences {
-		primerMatch.rcIndices = append(primerMatch.rcIndices, m.contig.index.Lookup(sequence, maxMismatchFlag)...)
+		for _, idx := range m.contig.index.Lookup(sequence, maxMismatchFlag) {
+			primerMatch.rcIndices[idx] = struct{}{}
+		}
 	}
 
 	if isForward {
@@ -473,10 +479,10 @@ func (p *PrimerList) Append(sequence, label []byte, isForwardPrimer bool) error 
 
 	if isForwardPrimer {
 		p.forward = append(p.forward, primer)
-		log.Printf("Add forward primer %s\n", primer)
+		log.Printf("Add forward primer:\n%s\n", primer)
 	} else {
 		p.reverse = append(p.reverse, primer)
-		log.Printf("Add reverse primer %s\n", primer)
+		log.Printf("Add reverse primer:\n%s\n", primer)
 	}
 
 	return nil

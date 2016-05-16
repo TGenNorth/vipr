@@ -269,12 +269,12 @@ func (x *Index) bounds(nt byte, iq indexQuery) indexQuery {
 		defer func(iq indexQuery, i, j, idx int) {
 			if err := recover(); err != nil {
 				var sa []int
-				for i := range iq.sa[i : i+j+1] {
+				for i := range iq.sa[i : j+i+1] {
 					//if len(x.data)-iq.sa[i] > len(iq.query)+iq.depth+1-iq.mismatch {
-					sa = append(sa, len(x.data[iq.sa[i]:]))
+					sa = append(sa, len(x.data[iq.sa[j+i]:]))
 					//}
 				}
-				log.Fatalf("Index.bounds\nquery %s\n%s\n%v\nlen(data) %d len(sa) %d sa[i+j] %d depth %d i %d j %d idx %d\n%s", iq.query, x.data[iq.sa[j+i]:], sa, len(x.data), len(iq.sa), iq.sa[i+j], iq.depth, i, j, idx, err)
+				log.Fatalf("Index.bounds\nquery %s\nsuffix %s\n%v\nlen(data) %d len(sa) %d sa[i+j] %d depth %d i %d j %d idx %d\n%s", iq.query, x.data[iq.sa[j+i]:], sa, len(x.data), len(iq.sa), iq.sa[i+j], iq.depth, i, j, idx, err)
 			}
 		}(iq, i, j, idx)
 		return x.data[idx] > nt
