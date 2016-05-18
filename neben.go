@@ -500,6 +500,9 @@ func (p *PrimerList) Read(r io.Reader) error {
 			// the forward reads listed on separate lines followed by
 			// a blank line followed by
 			// the reverse reads listed on separate lines
+			// FIXME: Because the flag is toggled with every empty line,
+			// it may toggle more than intended if the user uses more than
+			// one line to delimit the forward/reverse primers.
 			isForwardPrimer = !isForwardPrimer
 			continue
 		}
