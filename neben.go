@@ -34,7 +34,7 @@ func init() {
 	// TODO: do not allow negative
 	flag.IntVar(&maxMismatchFlag, "max-mismatch", 0, "")
 	flag.IntVar(&maxSequenceFlag, "max-sequence", 200, "")
-	flag.StringVar(&primersFlag, "primers", "", "path to a file with ")
+	flag.StringVar(&primersFlag, "primers", "", "path to a file listing forward followed by reverse primers")
 	flag.BoolVar(&debugFlag, "debug", false, "print log messages to stderr")
 }
 
@@ -91,6 +91,10 @@ func main() {
 
 	go matchWorkers(matchChan, indexChan, primers, threads)
 
+	writeMatches(matchChan)
+}
+
+func writeMatches(matchChan chan ContigMatch) {
 	//matches := make(map[string]map[int]struct{})
 	bw := bufio.NewWriter(os.Stdout)
 	defer bw.Flush()
@@ -139,6 +143,7 @@ func main() {
 			}
 		}
 	}
+
 }
 
 type Contig struct {
@@ -352,7 +357,9 @@ func (t text) String() string {
 	return string(t)
 }
 
+// MarshalJSON returns text as a quoted string.
 func (t text) MarshalJSON() ([]byte, error) {
+	// Duplicate the text with padding for the quotes
 	x := make([]byte, len(t)+2)
 	copy(x[1:], t)
 	x[0] = '"'
