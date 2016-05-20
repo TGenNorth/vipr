@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"index/suffixarray"
 	"path"
+	"strings"
 	"unicode"
 
 	"github.com/pkg/profile"
@@ -24,10 +25,32 @@ import (
 	"time"
 )
 
-const MaxUint = ^uint(0)
-const MinUint = 0
-const MaxInt = int(MaxUint >> 1)
-const MinInt = -MaxInt - 1
+/*
+A Adenine
+C Cytosine
+G Guanine
+T Thymine
+U Uracil
+W Weak A/T
+S Strong C/G
+M aMino A/C
+K Keto G/T
+R puRine A/G
+Y pYrimidine C/T
+B not A
+D not C
+H not G
+V not T
+N/- any Nucleotide (not a gap)
+*/
+const IupacNucleotideCode = "ACGTUMRWSYKVHDBN-"
+
+const (
+	MaxUint = ^uint(0)
+	MinUint = 0
+	MaxInt  = int(MaxUint >> 1)
+	MinInt  = -MaxInt - 1
+)
 
 var (
 	contigWorkersFlag uint
@@ -51,7 +74,7 @@ func init() {
 	//flag.IntVar(&maxMismatchFlag, "max-mismatch", 0, "")
 	//flag.IntVar(&maxSequenceFlag, "max-sequence", 200, "")
 	flag.Var(&primersFlag, "primers", "`PrimerList` is a filename or comma delimited list of forward followed by reverse primers to locate in the source contigs")
-	flag.StringVar(&profileFlag, "profile", "", "(dev) enable profiling one of cpu|mem|block")
+	flag.StringVar(&profileFlag, "profile", "", "(dev) enable profiling one of `cpu|mem|block`")
 	// TODO: support multiple log levels
 	//flag.BoolVar(&debugFlag, "debug", false, "print log messages to stderr")
 
@@ -74,7 +97,7 @@ func main() {
 	flag.Parse()
 	args := flag.Args()
 
-	switch profileFlag {
+	switch strings.ToLower(profileFlag) {
 	case "":
 	case "cpu":
 		defer profile.Start(profile.CPUProfile, profile.ProfilePath(".")).Stop()
@@ -512,44 +535,26 @@ type PrimerList struct {
 	reverse []Primer
 }
 
-func (p *PrimerList) Set(s string) error {
-	if len(s) == 0 {
-		return errors.New("the -primers flag value is empty")
-	}
-	// Try first reading first as a file
-	if primerListFile, err := os.Open(s); err == nil {
-		defer primerListFile.Close()
-		if err := p.Read(primerListFile); err != nil {
-			return err
-		}
-		return nil
-	}
-	// TODO: parse list of primers
-	// TODO: return error if both forward and reverse primers are not present
-	// Fallback to reading as a list of primers
-	/*strings.Split(s, ",")
-	if err != nil {
-		return fmt.Errorf("could not read primers list: %s", err)
-	}*/
-	return nil
-}
-
-func (p *PrimerList) String() string {
-	//return ""
-	forwardLabels := make([][]byte, len(p.forward))
-	for i := range p.forward {
-		forwardLabels[i] = p.forward[i].Label
-	}
-	reverseLabels := make([][]byte, len(p.reverse))
-	for i := range p.reverse {
-		reverseLabels[i] = p.reverse[i].Label
-	}
-	return fmt.Sprintf("{forward: %q, reverse: %q}", forwardLabels, reverseLabels)
-}
-
 func (p *PrimerList) Append(sequence, label []byte, isForwardPrimer bool) error {
+	// TODO: Should the sequence be appended if it is a duplicate?
+	// NOTE: There should be no side-effects modifying the sequence/label parameters.
+
+	// Normalize the sequence as capital letters.
+	sequence = bytes.ToUpper(sequence)
+
+	// If the user does not specify a label, the sequence is the default label.
+	// It is possible to keep the original sequence capitalization by explicitly
+	// copying the sequence before normalizing, but I decided to enforce all caps.
 	if label == nil {
 		label = sequence
+	}
+
+	// Validate sequence contains only characters in the IUPAC nucleotide code character set.
+	for i, nt := range sequence {
+		// TODO: Should '-' be replaced with 'N'?
+		if idx := bytes.IndexByte([]byte(IupacNucleotideCode), nt); idx == -1 {
+			return fmt.Errorf("invalid nucleotide code %q at position %d: %s", nt, i+1, sequence)
+		}
 	}
 
 	primer := Primer{
@@ -617,6 +622,72 @@ func (p *PrimerList) Read(r io.Reader) error {
 	}
 
 	return nil
+}
+
+func (p *PrimerList) Set(s string) error {
+	// TODO: return error if both forward and reverse primers are not present
+
+	if len(s) == 0 {
+		return errors.New("expected a filename or list of forward/reverse primers")
+	}
+
+	// First try reading as a file containing a list of primers.
+	if primerListFile, err := os.Open(s); err == nil {
+		defer primerListFile.Close()
+		if err := p.Read(primerListFile); err != nil {
+			return err
+		}
+		return nil
+	}
+
+	// Fallback to reading as a list of primers
+	// It is assumed the string will be:
+	// - a comma-delimited list of forward primers
+	// - a colon to delimit the forward/reverse primer lists
+	// - a comma-delimited list of reverse primers
+	//
+	// example: GATC,ATCG:GGGG,ATGC,CCTA
+
+	// Split the string into forward/reverse primers
+	primers := bytes.Split([]byte(s), []byte(":"))
+	if len(primers) != 2 {
+		return errors.New("expected a colon delimiting the list of forward primers from the list of reverse primers")
+	}
+
+	forward := bytes.Split(primers[0], []byte(","))
+	if len(forward) == 0 {
+		return errors.New("the list of forward primers is empty")
+	}
+	for i := range forward {
+		if err := p.Append(forward[i], forward[i], true); err != nil {
+			return err
+		}
+	}
+
+	reverse := bytes.Split(primers[1], []byte(","))
+	if len(reverse) == 0 {
+		return errors.New("the list of reverse primers is empty")
+	}
+	for i := range reverse {
+		if err := p.Append(reverse[i], reverse[i], false); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (p *PrimerList) String() string {
+	//return ""
+	forwardLabels := make([][]byte, len(p.forward))
+	for i := range p.forward {
+		forwardLabels[i] = p.forward[i].Label
+	}
+	reverseLabels := make([][]byte, len(p.reverse))
+	for i := range p.reverse {
+		reverseLabels[i] = p.reverse[i].Label
+	}
+	return fmt.Sprintf("{forward: %q, reverse: %q}", forwardLabels, reverseLabels)
 }
 
 var complementLookupTable = [256]uint8{
