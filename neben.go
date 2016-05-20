@@ -41,9 +41,10 @@ B not A
 D not C
 H not G
 V not T
-N/- any Nucleotide (not a gap)
+N any Nucleotide
+NOTE: . or - are valid characters to indicate a gap, but are excluded here as they are not relevant as primers.
 */
-const IupacNucleotideCode = "ACGTUMRWSYKVHDBN-"
+const IupacNucleotideCode = "ACGTUMRWSYKVHDBN"
 
 const (
 	MaxUint = ^uint(0)
@@ -174,41 +175,23 @@ func main() {
 	bw := bufio.NewWriter(os.Stdout)
 	defer bw.Flush()
 	writeMatches(bw, matchChan)
-	//writeMatchMatrix(bw, matchChan)
+	//writeMatchMatrix(bw, matchChan, primersFlag)
 }
 
-func writeMatchMatrix(w io.Writer, matchChan chan ContigMatch) {
+func writeMatchMatrix(w io.Writer, matchChan chan ContigMatch, primers PrimerList) {
+	//matchCount := make([]int, len(primers))
+	fwdPrimerMatchCounter := make([]int, len(primers.forward))
+	revPrimerMatchCounter := make([]int, len(primers.reverse))
+
 	fmt.Fprintf(w, "Reference: %s\n", "TODO: reference filename")
 	fmt.Fprintf(w, "Sequence: %d - %d\n", minSequenceLengthFlag, maxSequenceLengthFlag)
 	fmt.Fprintf(w, "Primers: TODO")
 	for match := range matchChan {
 		for _, fwd := range match.forward {
-			for _, rev := range match.reverse {
-				for fIdx := range fwd.indices {
-					for rIdx := range rev.rcIndices {
-						sequenceLength := rIdx + len(rev.primer.Sequence) - fIdx
-						if fIdx > rIdx || sequenceLength > maxSequenceLengthFlag || sequenceLength < minSequenceLengthFlag {
-							continue
-						}
-						//start := fIdx
-						//end := rIdx + len(rev.primer.Sequence)
-						//fmt.Fprintf(w, "+\t%s\t%s\t%s\t%d\t%d\t%d\t%s\t%s\n", fwd.primer.Label, rev.primer.Label, match.contig.sequence[start:end], start, end, end-start, filename, contigIdentifier)
-
-					}
-				}
-				for fIdx := range fwd.rcIndices {
-					for rIdx := range rev.indices {
-						sequenceLength := fIdx + len(fwd.primer.Sequence) - rIdx
-						if rIdx > fIdx || sequenceLength > maxSequenceLengthFlag || sequenceLength < minSequenceLengthFlag {
-							continue
-						}
-						//start := rIdx
-						//end := fIdx + len(fwd.primer.Sequence)
-						//rcSequence := reverseComplement(match.contig.sequence[start:end])
-						//fmt.Fprintf(w, "-\t%s\t%s\t%s\t%d\t%d\t%d\t%s\t%s\n", fwd.primer.Label, rev.primer.Label, rcSequence, start, end, end-start, filename, contigIdentifier)
-					}
-				}
-			}
+			fwdPrimerMatchCounter[fwd.primer.Idx] += len(fwd.indices) + len(fwd.rcIndices)
+		}
+		for _, rev := range match.reverse {
+			revPrimerMatchCounter[rev.primer.Idx] += len(rev.indices) + len(rev.rcIndices)
 		}
 	}
 }
@@ -216,12 +199,12 @@ func writeMatchMatrix(w io.Writer, matchChan chan ContigMatch) {
 func writeMatches(w io.Writer, matchChan chan ContigMatch) {
 	//matches := make(map[string]map[int]struct{})
 	for match := range matchChan {
-		/*for _, fwd := range match.forward {
-			log.Printf("MATCH FORWARD: %s %s %s %d %d\n", match.contig.descriptor, fwd.primer.sequence, reverseComplement(fwd.primer.sequence), len(fwd.indices), len(fwd.rcIndices))
+		for _, fwd := range match.forward {
+			log.Printf("MATCH FORWARD: %s %s %s %d %d\n", match.contig.descriptor, fwd.primer.Sequence, reverseComplement(fwd.primer.Sequence), len(fwd.indices), len(fwd.rcIndices))
 		}
 		for _, rev := range match.reverse {
-			log.Printf("MATCH REVERSE: %s %s %s %d %d\n", match.contig.descriptor, rev.primer.sequence, reverseComplement(rev.primer.sequence), len(rev.indices), len(rev.rcIndices))
-		}*/
+			log.Printf("MATCH REVERSE: %s %s %s %d %d\n", match.contig.descriptor, rev.primer.Sequence, reverseComplement(rev.primer.Sequence), len(rev.indices), len(rev.rcIndices))
+		}
 
 		contigIdentifier := []byte(match.contig.descriptor)
 		if idx := bytes.IndexByte(contigIdentifier, ' '); idx != -1 {
@@ -229,8 +212,10 @@ func writeMatches(w io.Writer, matchChan chan ContigMatch) {
 		}
 		for _, fwd := range match.forward {
 			for _, rev := range match.reverse {
-				for fIdx := range fwd.indices {
-					for rIdx := range rev.rcIndices {
+				//for fIdx := range fwd.indices {
+				for _, fIdx := range fwd.indices {
+					//for rIdx := range rev.rcIndices {
+					for _, rIdx := range rev.rcIndices {
 						sequenceLength := rIdx + len(rev.primer.Sequence) - fIdx
 						if fIdx > rIdx || sequenceLength > maxSequenceLengthFlag || sequenceLength < minSequenceLengthFlag {
 							continue
@@ -241,8 +226,10 @@ func writeMatches(w io.Writer, matchChan chan ContigMatch) {
 
 					}
 				}
-				for fIdx := range fwd.rcIndices {
-					for rIdx := range rev.indices {
+				//for fIdx := range fwd.rcIndices {
+				for _, fIdx := range fwd.rcIndices {
+					//for rIdx := range rev.indices {
+					for _, rIdx := range rev.indices {
 						sequenceLength := fIdx + len(fwd.primer.Sequence) - rIdx
 						if rIdx > fIdx || sequenceLength > maxSequenceLengthFlag || sequenceLength < minSequenceLengthFlag {
 							continue
@@ -316,10 +303,14 @@ func readFasta(sequenceChan chan<- *Contig, r io.Reader) {
 	}
 }
 
+// PrimerMatch pairs a primer with all the indices where it was found on either for sense or antisense strand of a contig.
+// See ContigMatch
 type PrimerMatch struct {
-	primer    Primer
-	indices   map[int]struct{}
-	rcIndices map[int]struct{}
+	primer Primer
+	//indices   map[int]struct{}
+	//rcIndices map[int]struct{}
+	indices   []int
+	rcIndices []int
 }
 
 func (c PrimerMatch) String() string {
@@ -348,21 +339,25 @@ func (c ContigMatch) String() string {
 
 func (m *ContigMatch) addPrimer(primer Primer, isForward bool) {
 	primerMatch := PrimerMatch{
-		primer:    primer,
-		indices:   make(map[int]struct{}),
-		rcIndices: make(map[int]struct{}),
+		primer: primer,
+		//indices:   make(map[int]struct{}),
+		//rcIndices: make(map[int]struct{}),
+		indices:   []int{},
+		rcIndices: []int{},
 	}
 
 	for _, sequence := range primer.Sequences {
-		for _, idx := range m.contig.index.Lookup(sequence, -1) {
-			primerMatch.indices[idx] = struct{}{}
-		}
+		//for _, idx := range m.contig.index.Lookup(sequence, -1) {
+		//	primerMatch.indices[idx] = struct{}{}
+		//}
+		primerMatch.indices = append(primerMatch.indices, m.contig.index.Lookup(sequence, -1)...)
 	}
 
 	for _, sequence := range primer.RcSequences {
-		for _, idx := range m.contig.index.Lookup(sequence, -1) {
-			primerMatch.rcIndices[idx] = struct{}{}
-		}
+		//for _, idx := range m.contig.index.Lookup(sequence, -1) {
+		//	primerMatch.rcIndices[idx] = struct{}{}
+		//}
+		primerMatch.rcIndices = append(primerMatch.rcIndices, m.contig.index.Lookup(sequence, -1)...)
 	}
 
 	if isForward {
@@ -430,7 +425,7 @@ func matchWorkers(matchChan chan ContigMatch, indexChan <-chan Contig, primers P
 	log.Println("Shutdown match WaitGroup")
 }
 
-// text is an alias for byte because []byte encodes as a base64-encoded string
+// text is an alias for byte because the json package encodes []byte as a base64-encoded string by default.
 type text []byte
 
 func (t text) String() string {
@@ -448,6 +443,8 @@ func (t text) MarshalJSON() ([]byte, error) {
 }
 
 type Primer struct {
+	// TODO: a unique sequential number assigned to each primer for the purpose of sorting matches
+	Idx int `json:"idx"`
 	// label is an optional description
 	Label text `json:"label"`
 	// sequence is the original sequence with degenerarcies
@@ -456,15 +453,6 @@ type Primer struct {
 	Sequences []text `json:"sequences"`
 	// rcSequences are the reverse complement of sequences
 	RcSequences []text `json:"rcSequences"`
-}
-
-// String is for unit test error messages
-func (p Primer) String() string {
-	if b, err := json.Marshal(p); err != nil {
-		return err.Error()
-	} else {
-		return string(b)
-	}
 }
 
 func expandDegeneratePosition(primers []text, position int, l ...byte) []text {
@@ -500,7 +488,7 @@ func expandDegenerateSequence(sequence []byte) []text {
 			// TODO: should unrecognized characters panic?
 			//primers = expandDegeneratePosition(primers, i, nt)
 			// This could return an error.
-			panic(fmt.Errorf("error expanding primer sequence: %s ", sequence))
+			panic(fmt.Errorf("invalid nucleotide at position %d: %s", i+1, sequence))
 		case 'A', 'C', 'G', 'T', 'U':
 			primers = expandDegeneratePosition(primers, i, nt)
 		case 'W':
@@ -523,8 +511,10 @@ func expandDegenerateSequence(sequence []byte) []text {
 			primers = expandDegeneratePosition(primers, i, 'A', 'C', 'T')
 		case 'V':
 			primers = expandDegeneratePosition(primers, i, 'A', 'C', 'G')
-		case 'N', '-':
+		case 'N':
 			primers = expandDegeneratePosition(primers, i, 'G', 'A', 'T', 'C')
+		case '.', '-':
+			panic(fmt.Errorf("%q is a valid IUPAC Nucleotide Code, but not a valid nucleotide", nt))
 		}
 	}
 	return primers
@@ -565,11 +555,21 @@ func (p *PrimerList) Append(sequence, label []byte, isForwardPrimer bool) error 
 	}
 
 	if isForwardPrimer {
+		primer.Idx = len(p.forward)
 		p.forward = append(p.forward, primer)
-		log.Printf("Add forward primer:\n%s\n", primer)
+		if s, err := json.Marshal(primer); err == nil {
+			log.Printf("Add forward primer:\n%s\n", s)
+		} else {
+			return fmt.Errorf("TODO: error context %s", err)
+		}
 	} else {
+		primer.Idx = len(p.reverse)
 		p.reverse = append(p.reverse, primer)
-		log.Printf("Add reverse primer:\n%s\n", primer)
+		if s, err := json.Marshal(primer); err == nil {
+			log.Printf("Add reverse primer:\n%s\n", s)
+		} else {
+			return fmt.Errorf("TODO: error context %s", err)
+		}
 	}
 
 	return nil
