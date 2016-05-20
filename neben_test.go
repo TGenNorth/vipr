@@ -76,32 +76,6 @@ func TestExpandDegenerateSequence(t *testing.T) {
 	}
 }*/
 
-func TestMatchWorker(t *testing.T) {
-
-}
-
-func TestReverseComplement(t *testing.T) {
-	var testtable = []struct {
-		in  []byte
-		out []byte
-		err error
-	}{
-		{[]byte(""), []byte(""), nil},
-		{[]byte("GATC"), []byte("GATC"), nil},
-		{[]byte("ACGTUMRWSYKVHDBN"), []byte("NVHDBMRSWYKAACGT"), nil},
-		{[]byte("GKTARGTAATCCAACTAGCACCT"), []byte("AGGTGCTAGTTGGATTACYTAMC"), nil},
-		{[]byte("GATQ"), nil, ErrInvalidSequence("unrecognized nucleotide 'Q' at index 3 in sequence \"GATQ\"")},
-		// FIXME: should it handle mixed-case?
-		//{[]byte("gatq"), nil, ErrInvalidSequence("unrecognized nucleotide 'q' at index 3 in sequence GATQ")},
-	}
-
-	for _, tt := range testtable {
-		if rc, err := reverseComplement(tt.in); err != tt.err || !bytes.Equal(tt.out, rc) {
-			t.Errorf("reverseComplement(%q) => %q, %q expected %q, %q\n", tt.in, rc, err, tt.out, tt.err)
-		}
-	}
-}
-
 func TestReadFasta(t *testing.T) {
 	descriptor := "ContigA"
 	// 5000 was chosen as a value larger than the default buffer size
@@ -267,6 +241,28 @@ func TestPrimerListRead(t *testing.T) {
 
 		if !reflect.DeepEqual(pl, tt.out) {
 			t.Errorf("PrimerList.Read(%q) => %q, expected %q\n", tt.in, pl, tt.out)
+		}
+	}
+}
+
+func TestReverseComplement(t *testing.T) {
+	var testtable = []struct {
+		in  []byte
+		out []byte
+		err error
+	}{
+		{[]byte(""), []byte(""), nil},
+		{[]byte("GATC"), []byte("GATC"), nil},
+		{[]byte("ACGTUMRWSYKVHDBN"), []byte("NVHDBMRSWYKAACGT"), nil},
+		{[]byte("GKTARGTAATCCAACTAGCACCT"), []byte("AGGTGCTAGTTGGATTACYTAMC"), nil},
+		{[]byte("GATQ"), nil, ErrInvalidSequence("unrecognized nucleotide 'Q' at index 3 in sequence \"GATQ\"")},
+		// FIXME: should it handle mixed-case?
+		//{[]byte("gatq"), nil, ErrInvalidSequence("unrecognized nucleotide 'q' at index 3 in sequence GATQ")},
+	}
+
+	for _, tt := range testtable {
+		if rc, err := reverseComplement(tt.in); err != tt.err || !bytes.Equal(tt.out, rc) {
+			t.Errorf("reverseComplement(%q) => %q, %q expected %q, %q\n", tt.in, rc, err, tt.out, tt.err)
 		}
 	}
 }

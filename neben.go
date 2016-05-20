@@ -4,13 +4,16 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
-	"io/ioutil"
+	"index/suffixarray"
 	"path"
 	"unicode"
 
-	"github.com/corburn/neben/fmi"
+	"github.com/pkg/profile"
+
+	//"github.com/corburn/neben/fmi"
 	//"github.com/pkg/profile"
 
 	"io"
@@ -21,83 +24,174 @@ import (
 	"time"
 )
 
+const MaxUint = ^uint(0)
+const MinUint = 0
+const MaxInt = int(MaxUint >> 1)
+const MinInt = -MaxInt - 1
+
 var (
-	threadsFlag     uint
-	maxMismatchFlag int
-	maxSequenceFlag int
-	primersFlag     string
-	debugFlag       bool
+	contigWorkersFlag uint
+	indexWorkersFlag  uint
+	searchWorkersFlag uint
+	//maxMismatchFlag int
+	minSequenceLengthFlag int
+	maxSequenceLengthFlag int
+	primersFlag           PrimerList
+	//debugFlag             bool
+	profileFlag string
 )
 
 func init() {
-	flag.UintVar(&threadsFlag, "threads", 10, "")
+	flag.UintVar(&contigWorkersFlag, "concurrent-contig", 5, "max pending contigs")
+	flag.UintVar(&indexWorkersFlag, "concurrent-index", 5, "concurrent contig index builders")
+	flag.UintVar(&searchWorkersFlag, "concurrent-search", 10, "concurrent contig index searches")
 	// TODO: do not allow negative
-	flag.IntVar(&maxMismatchFlag, "max-mismatch", 0, "")
-	flag.IntVar(&maxSequenceFlag, "max-sequence", 200, "")
-	flag.StringVar(&primersFlag, "primers", "", "path to a file listing forward followed by reverse primers")
-	flag.BoolVar(&debugFlag, "debug", false, "print log messages to stderr")
+	flag.IntVar(&minSequenceLengthFlag, "min", 0, "minimum sequence length")
+	flag.IntVar(&maxSequenceLengthFlag, "max", MaxInt, "maximum sequence length")
+	//flag.IntVar(&maxMismatchFlag, "max-mismatch", 0, "")
+	//flag.IntVar(&maxSequenceFlag, "max-sequence", 200, "")
+	flag.Var(&primersFlag, "primers", "`PrimerList` is a filename or comma delimited list of forward followed by reverse primers to locate in the source contigs")
+	flag.StringVar(&profileFlag, "profile", "", "(dev) enable profiling one of cpu|mem|block")
+	// TODO: support multiple log levels
+	//flag.BoolVar(&debugFlag, "debug", false, "print log messages to stderr")
+
+	// By default, the flag package will render the usage message default value from the type String() method.
+	// The PrimerList.String() is useful for debugging, not as a usage message default value.
+	// Override the default value with an empty string.
+	flag.Lookup("primers").DefValue = ""
 }
 
 var filename string
 
 func main() {
+	//var err error
+
 	flag.Usage = func() {
+		// TODO: Add ./neben help PrimerList subcommand documentation.
 		fmt.Fprintf(os.Stderr, "Usage of %s:\n", os.Args[0])
 		flag.PrintDefaults()
 	}
 	flag.Parse()
-	//defer profile.Start(profile.CPUProfile, profile.ProfilePath(".")).Stop()
 	args := flag.Args()
 
-	if !debugFlag {
-		log.SetOutput(ioutil.Discard)
-	}
-
-	if len(args) != 1 {
+	switch profileFlag {
+	case "":
+	case "cpu":
+		defer profile.Start(profile.CPUProfile, profile.ProfilePath(".")).Stop()
+	case "mem":
+		defer profile.Start(profile.MemProfile, profile.ProfilePath(".")).Stop()
+	case "block":
+		defer profile.Start(profile.BlockProfile, profile.ProfilePath(".")).Stop()
+	default:
+		log.Printf("invalid profile: %s\n", profileFlag)
 		flag.Usage()
 		os.Exit(1)
 	}
 
-	threads := int(threadsFlag)
-	// TODO: validate arguments
-	sequenceFilename := args[0]
-	filename = path.Base(sequenceFilename)
-	primerListFilename := primersFlag
-	sequenceChan := make(chan *Contig, threads/2)
-	indexChan := make(chan Contig, threads)
-	matchChan := make(chan ContigMatch, threads)
-
-	primerListFile, err := os.Open(primerListFilename)
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer primerListFile.Close()
-	var primers PrimerList
-	if err := primers.Read(primerListFile); err != nil {
-		log.Fatal(err)
+	if minSequenceLengthFlag < 0 || maxSequenceLengthFlag < 0 {
+		log.Printf("min and max must be positive integers\n")
+		flag.Usage()
+		os.Exit(1)
 	}
 
-	// Parse fasta into contigs
-	sequenceFile, err := os.Open(sequenceFilename)
-	if err != nil {
-		log.Fatal(err)
+	//if !debugFlag {
+	//log.SetOutput(ioutil.Discard)
+	//}
+
+	if len(primersFlag.forward) == 0 || len(primersFlag.reverse) == 0 {
+		// If the primer flag is set, its parser is responsible for validating the input.
+		// This guard exists in the event the flag was not set.
+		// The "flag needs an argument" error message mirrors the error returned by
+		// the flag package when a flag is set that expects an argument.
+		os.Stderr.WriteString("flag needs an argument: -primers\n")
+		flag.Usage()
+		os.Exit(1)
 	}
-	defer sequenceFile.Close()
+
+	sequenceChan := make(chan *Contig, contigWorkersFlag)
+	indexChan := make(chan Contig, indexWorkersFlag)
+	matchChan := make(chan ContigMatch, searchWorkersFlag)
+
+	// Read from either a fasta file
+	var sequenceFile *os.File
+	stat, _ := os.Stdin.Stat()
+	if (stat.Mode() & os.ModeCharDevice) == 0 {
+		// data is being piped to stdin
+		log.Printf("Reading from stdin\n")
+		if len(args) > 0 {
+			log.Fatalf("unexpected arguments: %v\n", args)
+		}
+		sequenceFile = os.Stdin
+		filename = "stdin"
+	} else {
+		// stdin is from a terminal
+		var err error
+		if len(args) == 0 {
+			log.Fatal("expected a fasta file either as a commandline argument or piped through stdin")
+		} else if len(args) > 1 {
+			log.Fatalf("unexpected arguments: %v\n", args[1:])
+		}
+
+		filename = path.Base(args[0])
+		log.Printf("Reading from %s\n", filename)
+		sequenceFile, err = os.Open(args[0])
+		if err != nil {
+			log.Fatal(err)
+		}
+		defer sequenceFile.Close()
+	}
 
 	go readFasta(sequenceChan, sequenceFile)
 
 	// Build suffix array
-	go suffixarrayWorkers(indexChan, sequenceChan, threads)
+	go suffixarrayWorkers(indexChan, sequenceChan, int(indexWorkersFlag))
 
-	go matchWorkers(matchChan, indexChan, primers, threads)
+	go matchWorkers(matchChan, indexChan, primersFlag, int(searchWorkersFlag))
 
-	writeMatches(matchChan)
-}
-
-func writeMatches(matchChan chan ContigMatch) {
-	//matches := make(map[string]map[int]struct{})
 	bw := bufio.NewWriter(os.Stdout)
 	defer bw.Flush()
+	writeMatches(bw, matchChan)
+	//writeMatchMatrix(bw, matchChan)
+}
+
+func writeMatchMatrix(w io.Writer, matchChan chan ContigMatch) {
+	fmt.Fprintf(w, "Reference: %s\n", "TODO: reference filename")
+	fmt.Fprintf(w, "Sequence: %d - %d\n", minSequenceLengthFlag, maxSequenceLengthFlag)
+	fmt.Fprintf(w, "Primers: TODO")
+	for match := range matchChan {
+		for _, fwd := range match.forward {
+			for _, rev := range match.reverse {
+				for fIdx := range fwd.indices {
+					for rIdx := range rev.rcIndices {
+						sequenceLength := rIdx + len(rev.primer.Sequence) - fIdx
+						if fIdx > rIdx || sequenceLength > maxSequenceLengthFlag || sequenceLength < minSequenceLengthFlag {
+							continue
+						}
+						//start := fIdx
+						//end := rIdx + len(rev.primer.Sequence)
+						//fmt.Fprintf(w, "+\t%s\t%s\t%s\t%d\t%d\t%d\t%s\t%s\n", fwd.primer.Label, rev.primer.Label, match.contig.sequence[start:end], start, end, end-start, filename, contigIdentifier)
+
+					}
+				}
+				for fIdx := range fwd.rcIndices {
+					for rIdx := range rev.indices {
+						sequenceLength := fIdx + len(fwd.primer.Sequence) - rIdx
+						if rIdx > fIdx || sequenceLength > maxSequenceLengthFlag || sequenceLength < minSequenceLengthFlag {
+							continue
+						}
+						//start := rIdx
+						//end := fIdx + len(fwd.primer.Sequence)
+						//rcSequence := reverseComplement(match.contig.sequence[start:end])
+						//fmt.Fprintf(w, "-\t%s\t%s\t%s\t%d\t%d\t%d\t%s\t%s\n", fwd.primer.Label, rev.primer.Label, rcSequence, start, end, end-start, filename, contigIdentifier)
+					}
+				}
+			}
+		}
+	}
+}
+
+func writeMatches(w io.Writer, matchChan chan ContigMatch) {
+	//matches := make(map[string]map[int]struct{})
 	for match := range matchChan {
 		/*for _, fwd := range match.forward {
 			log.Printf("MATCH FORWARD: %s %s %s %d %d\n", match.contig.descriptor, fwd.primer.sequence, reverseComplement(fwd.primer.sequence), len(fwd.indices), len(fwd.rcIndices))
@@ -115,29 +209,25 @@ func writeMatches(matchChan chan ContigMatch) {
 				for fIdx := range fwd.indices {
 					for rIdx := range rev.rcIndices {
 						sequenceLength := rIdx + len(rev.primer.Sequence) - fIdx
-						if fIdx > rIdx || (maxSequenceFlag > 0 && sequenceLength > maxSequenceFlag) {
+						if fIdx > rIdx || sequenceLength > maxSequenceLengthFlag || sequenceLength < minSequenceLengthFlag {
 							continue
 						}
 						start := fIdx
 						end := rIdx + len(rev.primer.Sequence)
-						fmt.Fprintf(bw, "+\t%s\t%s\t%s\t%d\t%d\t%d\t%s\t%s\n", fwd.primer.Label, rev.primer.Label, match.contig.sequence[start:end], start, end, end-start, filename, contigIdentifier)
+						fmt.Fprintf(w, "+\t%s\t%s\t%s\t%d\t%d\t%d\t%s\t%s\n", fwd.primer.Label, rev.primer.Label, match.contig.sequence[start:end], start, end, end-start, filename, contigIdentifier)
 
 					}
 				}
 				for fIdx := range fwd.rcIndices {
 					for rIdx := range rev.indices {
 						sequenceLength := fIdx + len(fwd.primer.Sequence) - rIdx
-						if rIdx > fIdx || (maxSequenceFlag > 0 && sequenceLength > maxSequenceFlag) {
+						if rIdx > fIdx || sequenceLength > maxSequenceLengthFlag || sequenceLength < minSequenceLengthFlag {
 							continue
 						}
 						start := rIdx
 						end := fIdx + len(fwd.primer.Sequence)
-						rcSequence, err := reverseComplement(match.contig.sequence[start:end])
-						if err != nil {
-							// TODO: add context to error
-							log.Fatal(err)
-						}
-						fmt.Fprintf(bw, "-\t%s\t%s\t%s\t%d\t%d\t%d\t%s\t%s\n", fwd.primer.Label, rev.primer.Label, rcSequence, start, end, end-start, filename, contigIdentifier)
+						rcSequence := reverseComplement(match.contig.sequence[start:end])
+						fmt.Fprintf(w, "-\t%s\t%s\t%s\t%d\t%d\t%d\t%s\t%s\n", fwd.primer.Label, rev.primer.Label, rcSequence, start, end, end-start, filename, contigIdentifier)
 					}
 				}
 			}
@@ -150,8 +240,7 @@ type Contig struct {
 	descriptor string
 	// NOTE: sequence MUST NOT be altered once assigned
 	sequence []byte
-	//index    *suffixarray.Index
-	index *fmi.Index
+	index    *suffixarray.Index
 }
 
 func NewContig(descriptor string) *Contig {
@@ -172,37 +261,6 @@ func (c *Contig) Free() {
 func (c *Contig) Write(b []byte) {
 	c.sequence = append(c.sequence, b...)
 }
-
-/*type Fasta struct {
-	r  io.Reader
-	br bufio.Reader
-}
-
-func (f *Fasta) ReadContig() (Contig, error) {
-	var line []byte
-	var err error
-	var contig *Contig
-
-	var id uint
-	for line, _, err = f.br.ReadLine(); err == nil || err != io.EOF; line, _, err = f.br.ReadLine() {
-		line = bytes.ToUpper(line)
-		if line[0] == '>' {
-			if contig != nil {
-				// A contig descriptor indicates the end of the prior contig for all except the first contig.
-				sequenceChan <- contig
-			}
-			contig = NewContig(string(line[1:]))
-		} else {
-			contig.Write(line)
-		}
-	}
-
-	if err != io.EOF {
-		return err
-	}
-
-	return *contig, nil
-}*/
 
 func readFasta(sequenceChan chan<- *Contig, r io.Reader) {
 	defer close(sequenceChan)
@@ -273,13 +331,13 @@ func (m *ContigMatch) addPrimer(primer Primer, isForward bool) {
 	}
 
 	for _, sequence := range primer.Sequences {
-		for _, idx := range m.contig.index.Lookup(sequence, maxMismatchFlag) {
+		for _, idx := range m.contig.index.Lookup(sequence, -1) {
 			primerMatch.indices[idx] = struct{}{}
 		}
 	}
 
 	for _, sequence := range primer.RcSequences {
-		for _, idx := range m.contig.index.Lookup(sequence, maxMismatchFlag) {
+		for _, idx := range m.contig.index.Lookup(sequence, -1) {
 			primerMatch.rcIndices[idx] = struct{}{}
 		}
 	}
@@ -301,10 +359,9 @@ func suffixarrayWorkers(indexChan chan<- Contig, sequenceChan <-chan *Contig, th
 			for contig := range sequenceChan {
 				log.Printf("Start index %s %d/%d\n", contig.descriptor, len(sequenceChan), cap(sequenceChan))
 				start := time.Now()
-				//contig.index = suffixarray.New(contig.sequence)
-				contig.index = fmi.New(contig.sequence)
-				indexChan <- *contig
+				contig.index = suffixarray.New(contig.sequence)
 				log.Printf("End index %s %d %fs\n", contig.descriptor, len(contig.sequence), time.Since(start).Seconds())
+				indexChan <- *contig
 			}
 			log.Printf("Shutdown index worker %d\n", i)
 		}(indexChan, sequenceChan, i)
@@ -455,7 +512,30 @@ type PrimerList struct {
 	reverse []Primer
 }
 
-func (p PrimerList) String() string {
+func (p *PrimerList) Set(s string) error {
+	if len(s) == 0 {
+		return errors.New("the -primers flag value is empty")
+	}
+	// Try first reading first as a file
+	if primerListFile, err := os.Open(s); err == nil {
+		defer primerListFile.Close()
+		if err := p.Read(primerListFile); err != nil {
+			return err
+		}
+		return nil
+	}
+	// TODO: parse list of primers
+	// TODO: return error if both forward and reverse primers are not present
+	// Fallback to reading as a list of primers
+	/*strings.Split(s, ",")
+	if err != nil {
+		return fmt.Errorf("could not read primers list: %s", err)
+	}*/
+	return nil
+}
+
+func (p *PrimerList) String() string {
+	//return ""
 	forwardLabels := make([][]byte, len(p.forward))
 	for i := range p.forward {
 		forwardLabels[i] = p.forward[i].Label
@@ -472,16 +552,11 @@ func (p *PrimerList) Append(sequence, label []byte, isForwardPrimer bool) error 
 		label = sequence
 	}
 
-	rcSequence, err := reverseComplement(sequence)
-	if err != nil {
-		return err
-	}
-
 	primer := Primer{
 		Label:       label,
 		Sequence:    sequence,
 		Sequences:   expandDegenerateSequence(sequence),
-		RcSequences: expandDegenerateSequence(rcSequence),
+		RcSequences: expandDegenerateSequence(reverseComplement(sequence)),
 	}
 
 	if isForwardPrimer {
@@ -544,23 +619,33 @@ func (p *PrimerList) Read(r io.Reader) error {
 	return nil
 }
 
-var reverseComplementTable = map[byte]byte{
-	'A': 'T',
-	'C': 'G',
-	'G': 'C',
-	'T': 'A',
-	'U': 'A',
-	'M': 'K',
-	'R': 'Y',
-	'W': 'W',
-	'S': 'S',
-	'Y': 'R',
-	'K': 'M',
-	'V': 'B',
-	'H': 'D',
-	'D': 'H',
-	'B': 'V',
-	'N': 'N',
+var complementLookupTable = [256]uint8{
+	'A': 'T', 'a': 'T',
+	'C': 'G', 'c': 'G',
+	'G': 'C', 'g': 'C',
+	'T': 'A', 't': 'A',
+	'U': 'A', 'u': 'A',
+	'M': 'K', 'm': 'K',
+	'R': 'Y', 'r': 'Y',
+	'W': 'W', 'w': 'W',
+	'S': 'S', 's': 'S',
+	'Y': 'R', 'y': 'R',
+	'K': 'M', 'k': 'M',
+	'V': 'B', 'v': 'B',
+	'H': 'D', 'h': 'D',
+	'D': 'H', 'd': 'H',
+	'B': 'V', 'b': 'V',
+	'N': 'N', 'n': 'N',
+	'-': 'N',
+}
+
+func reverseComplement(s []byte) []byte {
+	sLen := len(s)
+	rc := make([]byte, sLen)
+	for i := 0; i < sLen; i++ {
+		rc[i] = complementLookupTable[s[sLen-i-1]]
+	}
+	return rc
 }
 
 type ErrInvalidFormat string
@@ -573,18 +658,4 @@ type ErrInvalidSequence string
 
 func (e ErrInvalidSequence) Error() string {
 	return string(e)
-}
-
-func reverseComplement(s []byte) ([]byte, error) {
-	sLen := len(s)
-	rc := make([]byte, sLen)
-	for i := 0; i < sLen; i++ {
-		idx := sLen - i - 1
-		if c, ok := reverseComplementTable[s[idx]]; ok {
-			rc[i] = c
-		} else {
-			return nil, ErrInvalidSequence(fmt.Sprintf("unrecognized nucleotide %q at index %d in sequence %q", s[idx], idx, s))
-		}
-	}
-	return rc, nil
 }
