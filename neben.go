@@ -174,8 +174,8 @@ func main() {
 
 	bw := bufio.NewWriter(os.Stdout)
 	defer bw.Flush()
-	writeMatches(bw, matchChan)
-	//writeMatchMatrix(bw, matchChan, primersFlag)
+	//writeMatches(bw, matchChan)
+	writeMatchMatrix(bw, matchChan, primersFlag)
 }
 
 func writeMatchMatrix(w io.Writer, matchChan chan ContigMatch, primers PrimerList) {
@@ -194,6 +194,15 @@ func writeMatchMatrix(w io.Writer, matchChan chan ContigMatch, primers PrimerLis
 			revPrimerMatchCounter[rev.primer.Idx] += len(rev.indices) + len(rev.rcIndices)
 		}
 	}
+
+	for i := range primers.forward {
+		fmt.Fprintf(w, "%s\t%d\n", primers.forward[i].Label, fwdPrimerMatchCounter[i])
+	}
+
+	for i := range primers.reverse {
+		fmt.Fprintf(w, "%s\t%d\n", primers.reverse[i].Label, revPrimerMatchCounter[i])
+	}
+
 }
 
 func writeMatches(w io.Writer, matchChan chan ContigMatch) {
