@@ -87,6 +87,19 @@ func init() {
 
 var filename string
 
+//var usageTemplate = `TODO: oneline summary of program purpose
+//Usage:
+//	neben command [arguments]
+//The commands are:
+//{{range .}}{{if .Runnable}}
+//	{{.Name | printf "%-11s"}} {{.Short}}{{end}}{{end}}
+//Use "go help [command]" for more information about a command.
+//Additional help topics:
+//{{range .}}{{if not .Runnable}}
+//	{{.Name | printf "%-11s"}} {{.Short}}{{end}}{{end}}
+//Use "go help [topic]" for more information about that topic.
+//`
+
 func main() {
 	//var err error
 
@@ -179,30 +192,83 @@ func main() {
 }
 
 func writeMatchMatrix(w io.Writer, matchChan chan ContigMatch, primers PrimerList) {
-	//matchCount := make([]int, len(primers))
 	fwdPrimerMatchCounter := make([]int, len(primers.forward))
 	revPrimerMatchCounter := make([]int, len(primers.reverse))
 
-	fmt.Fprintf(w, "Reference: %s\n", "TODO: reference filename")
-	fmt.Fprintf(w, "Sequence: %d - %d\n", minSequenceLengthFlag, maxSequenceLengthFlag)
-	fmt.Fprintf(w, "Primers: TODO")
+	matrix := make([][]int, len(primers.forward))
+	for i := range matrix {
+		matrix[i] = make([]int, len(primers.reverse))
+	}
+
+	// Aggregate matches
 	for match := range matchChan {
+		// Count all potential forward primer hits
 		for _, fwd := range match.forward {
 			fwdPrimerMatchCounter[fwd.primer.Idx] += len(fwd.indices) + len(fwd.rcIndices)
 		}
+		// Count all potential reverse primer hits
 		for _, rev := range match.reverse {
 			revPrimerMatchCounter[rev.primer.Idx] += len(rev.indices) + len(rev.rcIndices)
 		}
+
+		for _, fwd := range match.forward {
+			for _, rev := range match.reverse {
+				for _, fIdx := range fwd.indices {
+					for _, rIdx := range rev.rcIndices {
+						sequenceLength := rIdx + len(rev.primer.Sequence) - fIdx
+						if fIdx > rIdx || sequenceLength > maxSequenceLengthFlag || sequenceLength < minSequenceLengthFlag {
+							continue
+						}
+						matrix[fwd.primer.Idx][rev.primer.Idx]++
+
+					}
+				}
+				for _, fIdx := range fwd.rcIndices {
+					for _, rIdx := range rev.indices {
+						sequenceLength := fIdx + len(fwd.primer.Sequence) - rIdx
+						if rIdx > fIdx || sequenceLength > maxSequenceLengthFlag || sequenceLength < minSequenceLengthFlag {
+							continue
+						}
+						matrix[fwd.primer.Idx][rev.primer.Idx]++
+					}
+				}
+
+			}
+		}
 	}
 
+	// Print summary
+	fmt.Fprintf(w, "Source: %s\n", filename)
+	fmt.Fprintf(w, "Min: %d\n", minSequenceLengthFlag)
+	fmt.Fprintf(w, "Max: %d\n", maxSequenceLengthFlag)
+
+	fmt.Fprintf(w, "\n\nForward primer hits:\n")
 	for i := range primers.forward {
 		fmt.Fprintf(w, "%s\t%d\n", primers.forward[i].Label, fwdPrimerMatchCounter[i])
 	}
 
+	fmt.Fprintf(w, "\n\nReverse primer hits:\n")
 	for i := range primers.reverse {
 		fmt.Fprintf(w, "%s\t%d\n", primers.reverse[i].Label, revPrimerMatchCounter[i])
 	}
 
+	// Print matrix
+
+	// Print header
+	fmt.Fprintf(w, "\t")
+	for column := range primers.reverse {
+		fmt.Fprintf(w, "%s\t", primers.reverse[column].Label)
+	}
+	fmt.Fprintf(w, "\n")
+
+	// Print rows/columns
+	for row := range matrix {
+		fmt.Fprintf(w, "%s\t", primers.forward[row].Label)
+		for column := range matrix[row] {
+			fmt.Fprintf(w, "%d\t", matrix[row][column])
+		}
+		fmt.Fprintf(w, "\n")
+	}
 }
 
 func writeMatches(w io.Writer, matchChan chan ContigMatch) {
