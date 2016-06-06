@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"index/suffixarray"
 	"path"
+	"sort"
 	"strings"
 	"unicode"
 
@@ -54,15 +55,17 @@ const (
 )
 
 var (
-	contigWorkersFlag uint
-	indexWorkersFlag  uint
-	searchWorkersFlag uint
-	//maxMismatchFlag int
-	minSequenceLengthFlag int
-	maxSequenceLengthFlag int
-	primersFlag           PrimerList
 	//debugFlag             bool
-	profileFlag string
+	//maxMismatchFlag int
+	contigWorkersFlag     uint
+	indexWorkersFlag      uint
+	searchWorkersFlag     uint
+	maxSequenceLengthFlag int
+	minSequenceLengthFlag int
+	primersFlag           PrimerList
+	probeFlag             ProbeFlag
+	profileFlag           string
+	typeFlag              string
 )
 
 func init() {
@@ -73,9 +76,10 @@ func init() {
 	flag.IntVar(&minSequenceLengthFlag, "min", 0, "minimum sequence length")
 	flag.IntVar(&maxSequenceLengthFlag, "max", MaxInt, "maximum sequence length")
 	//flag.IntVar(&maxMismatchFlag, "max-mismatch", 0, "")
-	//flag.IntVar(&maxSequenceFlag, "max-sequence", 200, "")
 	flag.Var(&primersFlag, "primers", "`PrimerList` is a filename or comma delimited list of forward followed by reverse primers to locate in the source contigs")
+	flag.Var(&probeFlag, "probe", "`PROBE` is an optional, comma delimited list of DNA sequences that must be present for an allele to be considered a match")
 	flag.StringVar(&profileFlag, "profile", "", "(dev) enable profiling one of `cpu|mem|block`")
+	flag.StringVar(&typeFlag, "type", "allele", "one of `allele|stat`")
 	// TODO: support multiple log levels
 	//flag.BoolVar(&debugFlag, "debug", false, "print log messages to stderr")
 
@@ -105,7 +109,7 @@ func main() {
 
 	flag.Usage = func() {
 		// TODO: Add ./neben help PrimerList subcommand documentation.
-		fmt.Fprintf(os.Stderr, "Usage of %s:\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "usage: %s --primers PrimerList.txt Assembly.fasta\n", os.Args[0])
 		flag.PrintDefaults()
 	}
 	flag.Parse()
@@ -120,15 +124,11 @@ func main() {
 	case "block":
 		defer profile.Start(profile.BlockProfile, profile.ProfilePath(".")).Stop()
 	default:
-		log.Printf("invalid profile: %s\n", profileFlag)
-		flag.Usage()
-		os.Exit(1)
+		fatalf("invalid profile: %s\n", profileFlag)
 	}
 
 	if minSequenceLengthFlag < 0 || maxSequenceLengthFlag < 0 {
-		log.Printf("min and max must be positive integers\n")
-		flag.Usage()
-		os.Exit(1)
+		fatalf("min and max must be positive integers\n")
 	}
 
 	//if !debugFlag {
@@ -140,9 +140,7 @@ func main() {
 		// This guard exists in the event the flag was not set.
 		// The "flag needs an argument" error message mirrors the error returned by
 		// the flag package when a flag is set that expects an argument.
-		os.Stderr.WriteString("flag needs an argument: -primers\n")
-		flag.Usage()
-		os.Exit(1)
+		fatalf("flag needs an argument: -primers\n")
 	}
 
 	sequenceChan := make(chan *Contig, contigWorkersFlag)
@@ -164,9 +162,9 @@ func main() {
 		// stdin is from a terminal
 		var err error
 		if len(args) == 0 {
-			log.Fatal("expected a fasta file either as a commandline argument or piped through stdin")
+			fatalf("expected a fasta file either as a commandline argument or piped through stdin")
 		} else if len(args) > 1 {
-			log.Fatalf("unexpected arguments: %v\n", args[1:])
+			fatalf("unexpected arguments: %v\n", args[1:])
 		}
 
 		filename = path.Base(args[0])
@@ -183,18 +181,28 @@ func main() {
 	// Build suffix array
 	go suffixarrayWorkers(indexChan, sequenceChan, int(indexWorkersFlag))
 
-	go matchWorkers(matchChan, indexChan, primersFlag, int(searchWorkersFlag))
+	go matchWorkers(matchChan, indexChan, probeFlag, primersFlag, int(searchWorkersFlag))
 
 	bw := bufio.NewWriter(os.Stdout)
 	defer bw.Flush()
-	//writeMatches(bw, matchChan)
-	writeMatchMatrix(bw, matchChan, primersFlag)
+
+	switch typeFlag {
+	case "allele":
+		writeMatches(bw, matchChan, minSequenceLengthFlag, maxSequenceLengthFlag)
+	case "stat":
+		writeMatchMatrix(bw, matchChan, primersFlag, minSequenceLengthFlag, maxSequenceLengthFlag)
+	default:
+		fatalf("type flag value must be either allele or stat\n")
+	}
 }
 
-func writeMatchMatrix(w io.Writer, matchChan chan ContigMatch, primers PrimerList) {
+func writeMatchMatrix(w io.Writer, matchChan chan ContigMatch, primers PrimerList, minLen, maxLen int) {
+	// {fwd,rev}PrimerMatchCounter count how many times each primer was found.
+	// It does not account for whether the primer actually paired with anything.
 	fwdPrimerMatchCounter := make([]int, len(primers.forward))
 	revPrimerMatchCounter := make([]int, len(primers.reverse))
 
+	// Initialize a 2D matrix with a counter for each forward/reverse primer pair
 	matrix := make([][]int, len(primers.forward))
 	for i := range matrix {
 		matrix[i] = make([]int, len(primers.reverse))
@@ -202,6 +210,8 @@ func writeMatchMatrix(w io.Writer, matchChan chan ContigMatch, primers PrimerLis
 
 	// Aggregate matches
 	for match := range matchChan {
+		log.Printf("aggregate contig results: %s\n", match.contig.descriptor)
+
 		// Count all potential forward primer hits
 		for _, fwd := range match.forward {
 			fwdPrimerMatchCounter[fwd.primer.Idx] += len(fwd.indices) + len(fwd.rcIndices)
@@ -211,22 +221,25 @@ func writeMatchMatrix(w io.Writer, matchChan chan ContigMatch, primers PrimerLis
 			revPrimerMatchCounter[rev.primer.Idx] += len(rev.indices) + len(rev.rcIndices)
 		}
 
+		// Pair every forward/reverse primer combination.
 		for _, fwd := range match.forward {
+			fLen := len(fwd.primer.Sequence)
 			for _, rev := range match.reverse {
+				rLen := len(rev.primer.Sequence)
+				// Locate all the potential sense strand alleles pairing all the permutations of each primer.
 				for _, fIdx := range fwd.indices {
 					for _, rIdx := range rev.rcIndices {
-						sequenceLength := rIdx + len(rev.primer.Sequence) - fIdx
-						if fIdx > rIdx || sequenceLength > maxSequenceLengthFlag || sequenceLength < minSequenceLengthFlag {
+						if !match.isAllele(fIdx, fLen, rIdx, rLen, minLen, maxLen, true) {
 							continue
 						}
 						matrix[fwd.primer.Idx][rev.primer.Idx]++
 
 					}
 				}
+				// Locate all the potential antisense strand alleles pairing all the permutations of each primer.
 				for _, fIdx := range fwd.rcIndices {
 					for _, rIdx := range rev.indices {
-						sequenceLength := fIdx + len(fwd.primer.Sequence) - rIdx
-						if rIdx > fIdx || sequenceLength > maxSequenceLengthFlag || sequenceLength < minSequenceLengthFlag {
+						if !match.isAllele(fIdx, fLen, rIdx, rLen, minLen, maxLen, false) {
 							continue
 						}
 						matrix[fwd.primer.Idx][rev.primer.Idx]++
@@ -271,7 +284,7 @@ func writeMatchMatrix(w io.Writer, matchChan chan ContigMatch, primers PrimerLis
 	}
 }
 
-func writeMatches(w io.Writer, matchChan chan ContigMatch) {
+func writeMatches(w io.Writer, matchChan chan ContigMatch, minLen, maxLen int) {
 	//matches := make(map[string]map[int]struct{})
 	for match := range matchChan {
 		for _, fwd := range match.forward {
@@ -286,13 +299,14 @@ func writeMatches(w io.Writer, matchChan chan ContigMatch) {
 			contigIdentifier = contigIdentifier[:idx]
 		}
 		for _, fwd := range match.forward {
+			fLen := len(fwd.primer.Sequence)
 			for _, rev := range match.reverse {
+				rLen := len(rev.primer.Sequence)
 				//for fIdx := range fwd.indices {
 				for _, fIdx := range fwd.indices {
 					//for rIdx := range rev.rcIndices {
 					for _, rIdx := range rev.rcIndices {
-						sequenceLength := rIdx + len(rev.primer.Sequence) - fIdx
-						if fIdx > rIdx || sequenceLength > maxSequenceLengthFlag || sequenceLength < minSequenceLengthFlag {
+						if !match.isAllele(fIdx, fLen, rIdx, rLen, minLen, maxLen, true) {
 							continue
 						}
 						start := fIdx
@@ -305,8 +319,7 @@ func writeMatches(w io.Writer, matchChan chan ContigMatch) {
 				for _, fIdx := range fwd.rcIndices {
 					//for rIdx := range rev.indices {
 					for _, rIdx := range rev.indices {
-						sequenceLength := fIdx + len(fwd.primer.Sequence) - rIdx
-						if rIdx > fIdx || sequenceLength > maxSequenceLengthFlag || sequenceLength < minSequenceLengthFlag {
+						if !match.isAllele(fIdx, fLen, rIdx, rLen, minLen, maxLen, false) {
 							continue
 						}
 						start := rIdx
@@ -370,7 +383,7 @@ func readFasta(sequenceChan chan<- *Contig, r io.Reader) {
 	}
 
 	if err != io.EOF {
-		log.Fatal(err)
+		fatalf("%s\n", err)
 	}
 
 	if contig != nil {
@@ -398,9 +411,46 @@ func (c PrimerMatch) String() string {
 }
 
 type ContigMatch struct {
-	contig  Contig
-	forward []PrimerMatch
-	reverse []PrimerMatch
+	contig              Contig
+	probeForwardIndices []int
+	probeReverseIndices []int
+	forward             []PrimerMatch
+	reverse             []PrimerMatch
+}
+
+func NewContigMatch(contig Contig, probes ProbeFlag, primers PrimerList) *ContigMatch {
+	var probeForward, probeReverse []int
+	for _, probe := range probes {
+		for i := range probe.Sequences {
+			probeForward = append(probeForward, contig.index.Lookup(probe.Sequences[i], -1)...)
+		}
+
+		for i := range probe.RcSequences {
+			probeReverse = append(probeReverse, contig.index.Lookup(probe.RcSequences[i], -1)...)
+		}
+	}
+
+	// The probe indices MUST be sorted for efficient searching when checking
+	// for their presence in a sequence.
+	sort.Ints(probeForward)
+	sort.Ints(probeReverse)
+
+	m := ContigMatch{
+		contig:              contig,
+		probeForwardIndices: probeForward,
+		probeReverseIndices: probeReverse,
+	}
+
+	// TODO: is primer search required is probe not found?
+	for i := range primers.forward {
+		m.addPrimer(primers.forward[i], true)
+	}
+
+	for i := range primers.reverse {
+		m.addPrimer(primers.reverse[i], false)
+	}
+
+	return &m
 }
 
 func (c ContigMatch) String() string {
@@ -442,6 +492,63 @@ func (m *ContigMatch) addPrimer(primer Primer, isForward bool) {
 	}
 }
 
+func (m *ContigMatch) isAllele(fIdx, fLen, rIdx, rLen, min, max int, isForward bool) bool {
+	// sequenceLength is the length of the entire allele sequence including the forward/reverse primer
+	var startIdx, startLen, endIdx, endLen int
+
+	if isForward {
+		startIdx, startLen, endIdx, endLen = fIdx, fLen, rIdx, rLen
+	} else {
+		startIdx, startLen, endIdx, endLen = rIdx, rLen, fIdx, fLen
+	}
+
+	sequenceLength := endIdx + endLen - startIdx
+
+	// An allele is assumed to be any sequence:
+	// - bounded on either side by any forward/reverse primer pair
+	// - contains any probe sequence
+	// - does not exceed the users min/max lengths
+	return startIdx < endIdx &&
+		sequenceLength > min &&
+		sequenceLength < max &&
+		//(len(probeFlag) == 0 || m.sequenceContainsProbe(startIdx+startLen, endIdx-1, isForward))
+		m.sequenceContainsProbe(startIdx+startLen, endIdx-1, isForward)
+}
+
+// sequenceContainsProbe returns true if a probe was found within the (inclusive) range of position.
+// the start/end index boundaries of a sequence in the contig.
+func (m *ContigMatch) sequenceContainsProbe(startIdx, endIdx int, isForward bool) bool {
+	var probeIndices []int
+
+	// FIXME: panic if the start/end indices are not valid indices of the contig sequence.
+	// if startIdx > endIdx || startIdx < 0 || endIdx < 0 {
+	//	panic(fmt.Sprintf("invalid sequence range %d - %d in contig %s length %d\n",
+	//	startIdx, endIdx, m.contig.descriptor, len(contig.sequence)))
+	//}
+
+	if isForward {
+		probeIndices = m.probeForwardIndices
+	} else {
+		probeIndices = m.probeReverseIndices
+	}
+
+	// If the user did not specify a probe, it does not matter if the sequence contains a probe.
+	// This guards against an index out of bounds error.
+	if len(probeIndices) == 0 {
+		return true
+	}
+
+	// Assuming the probe indices are sorted, find the first probe index that at least matches the startIdx position.
+	// Return the length of the array if no match is found.
+	i := sort.Search(len(probeIndices), func(i int) bool {
+		return startIdx <= probeIndices[i]
+	})
+
+	// FIXME: The function finds a probe that starts within the sequence, but no where does it check the end position.
+	// The function does not verify the probe is contained within the sequence.
+	return i < len(probeIndices) && probeIndices[i] <= endIdx
+}
+
 func suffixarrayWorkers(indexChan chan<- Contig, sequenceChan <-chan *Contig, threads int) {
 	defer close(indexChan)
 	var wg sync.WaitGroup
@@ -463,7 +570,7 @@ func suffixarrayWorkers(indexChan chan<- Contig, sequenceChan <-chan *Contig, th
 	log.Println("Shutdown index WaitGroup")
 }
 
-func matchWorkers(matchChan chan ContigMatch, indexChan <-chan Contig, primers PrimerList, threads int) {
+func matchWorkers(matchChan chan ContigMatch, indexChan <-chan Contig, probes ProbeFlag, primers PrimerList, threads int) {
 	defer close(matchChan)
 	var wg sync.WaitGroup
 	wg.Add(threads)
@@ -474,20 +581,7 @@ func matchWorkers(matchChan chan ContigMatch, indexChan <-chan Contig, primers P
 				log.Printf("Start match %s %d/%d\n", contig.descriptor, len(indexChan), cap(indexChan))
 				start := time.Now()
 
-				contigMatch := ContigMatch{
-					contig: contig,
-				}
-
-				log.Printf("Scan FORWARD primers in %s\n", contig.descriptor)
-				for _, primer := range primers.forward {
-					contigMatch.addPrimer(primer, true)
-				}
-				log.Printf("Scan REVERSE primers in %s\n", contig.descriptor)
-				for _, primer := range primers.reverse {
-					contigMatch.addPrimer(primer, false)
-				}
-
-				matchChan <- contigMatch
+				matchChan <- *NewContigMatch(contig, probes, primers)
 
 				log.Printf("End match %s %d %fs\n", contig.descriptor, len(contig.sequence), time.Since(start).Seconds())
 			}
@@ -563,7 +657,10 @@ func expandDegenerateSequence(sequence []byte) []text {
 			// TODO: should unrecognized characters panic?
 			//primers = expandDegeneratePosition(primers, i, nt)
 			// This could return an error.
-			panic(fmt.Errorf("invalid nucleotide at position %d: %s", i+1, sequence))
+			panic(ErrInvalidNucleotide{
+				position: i + 1,
+				sequence: string(sequence),
+			})
 		case 'A', 'C', 'G', 'T', 'U':
 			primers = expandDegeneratePosition(primers, i, nt)
 		case 'W':
@@ -589,7 +686,7 @@ func expandDegenerateSequence(sequence []byte) []text {
 		case 'N':
 			primers = expandDegeneratePosition(primers, i, 'G', 'A', 'T', 'C')
 		case '.', '-':
-			panic(fmt.Errorf("%q is a valid IUPAC Nucleotide Code, but not a valid nucleotide", nt))
+			panic(fmt.Errorf("%q is a valid IUPAC Nucleotide Code, but not a valid nucleotide at position %d in sequence %s", nt, i+1, sequence))
 		}
 	}
 	return primers
@@ -618,7 +715,10 @@ func (p *PrimerList) Append(sequence, label []byte, isForwardPrimer bool) error 
 	for i, nt := range sequence {
 		// TODO: Should '-' be replaced with 'N'?
 		if idx := bytes.IndexByte([]byte(IupacNucleotideCode), nt); idx == -1 {
-			return fmt.Errorf("invalid nucleotide code %q at position %d: %s", nt, i+1, sequence)
+			return ErrInvalidNucleotide{
+				position: i + 1,
+				sequence: string(sequence),
+			}
 		}
 	}
 
@@ -633,7 +733,7 @@ func (p *PrimerList) Append(sequence, label []byte, isForwardPrimer bool) error 
 		primer.Idx = len(p.forward)
 		p.forward = append(p.forward, primer)
 		if s, err := json.Marshal(primer); err == nil {
-			log.Printf("Add forward primer:\n%s\n", s)
+			log.Printf("Add forward primer: %s\n", s)
 		} else {
 			return fmt.Errorf("TODO: error context %s", err)
 		}
@@ -641,7 +741,7 @@ func (p *PrimerList) Append(sequence, label []byte, isForwardPrimer bool) error 
 		primer.Idx = len(p.reverse)
 		p.reverse = append(p.reverse, primer)
 		if s, err := json.Marshal(primer); err == nil {
-			log.Printf("Add reverse primer:\n%s\n", s)
+			log.Printf("Add reverse primer: %s\n", s)
 		} else {
 			return fmt.Errorf("TODO: error context %s", err)
 		}
@@ -726,11 +826,11 @@ func (p *PrimerList) Set(s string) error {
 	// Split the string into forward/reverse primers
 	primers := bytes.Split([]byte(s), []byte(":"))
 	if len(primers) != 2 {
-		return errors.New("expected a colon delimiting the list of forward primers from the list of reverse primers")
+		return errors.New("expected a colon delimiting the list of forward primers from the reverse primers")
 	}
 
 	forward := bytes.Split(primers[0], []byte(","))
-	if len(forward) == 0 {
+	if len(forward) == 1 && len(forward[0]) == 0 {
 		return errors.New("the list of forward primers is empty")
 	}
 	for i := range forward {
@@ -740,7 +840,7 @@ func (p *PrimerList) Set(s string) error {
 	}
 
 	reverse := bytes.Split(primers[1], []byte(","))
-	if len(reverse) == 0 {
+	if len(reverse) == 1 && len(reverse[0]) == 0 {
 		return errors.New("the list of reverse primers is empty")
 	}
 	for i := range reverse {
@@ -765,6 +865,50 @@ func (p *PrimerList) String() string {
 	return fmt.Sprintf("{forward: %q, reverse: %q}", forwardLabels, reverseLabels)
 }
 
+type Probe struct {
+	Sequence    text   `json:"sequence"`
+	Sequences   []text `json:"sequences"`
+	RcSequences []text `json:"rcSequences"`
+}
+
+type ProbeFlag []Probe
+
+func (p *ProbeFlag) Set(s string) error {
+	probes := bytes.Split([]byte(s), []byte(","))
+
+	for i := range probes {
+		sequence, err := iupacNucleotideSequence(probes[i])
+		if err != nil {
+			return err
+		}
+
+		probe := Probe{
+			Sequence:    sequence,
+			Sequences:   expandDegenerateSequence(sequence),
+			RcSequences: expandDegenerateSequence(reverseComplement(sequence)),
+		}
+
+		if s, err := json.Marshal(probe); err == nil {
+			log.Printf("Add probe: %s\n", s)
+		} else {
+			return fmt.Errorf("TODO: error context %s", err)
+		}
+
+		*p = append(*p, probe)
+	}
+
+	return nil
+}
+
+func (p *ProbeFlag) String() string {
+	this := *p
+	b := make([][]byte, len(this))
+	for i := range this {
+		b[i] = this[i].Sequence
+	}
+	return string(bytes.Join(b, []byte(",")))
+}
+
 var complementLookupTable = [256]uint8{
 	'A': 'T', 'a': 'T',
 	'C': 'G', 'c': 'G',
@@ -782,14 +926,20 @@ var complementLookupTable = [256]uint8{
 	'D': 'H', 'd': 'H',
 	'B': 'V', 'b': 'V',
 	'N': 'N', 'n': 'N',
-	'-': 'N',
+	'-': '-', '.': '.',
 }
 
+// reverseComplement returns the reverse complement of a nucleotide sequence.
 func reverseComplement(s []byte) []byte {
 	sLen := len(s)
 	rc := make([]byte, sLen)
 	for i := 0; i < sLen; i++ {
 		rc[i] = complementLookupTable[s[sLen-i-1]]
+		// FIXME: all invalid nucleotide character codes will silently be replaced with
+		// a zero value. Should this trigger a panic or throw an error?
+		//if rc[i] == 0 {
+		//	panic(fmt.Errorf(""))
+		//}
 	}
 	return rc
 }
@@ -800,8 +950,35 @@ func (e ErrInvalidFormat) Error() string {
 	return string(e)
 }
 
-type ErrInvalidSequence string
+func iupacNucleotideSequence(s []byte) (text, error) {
+	s = bytes.ToUpper(s)
 
-func (e ErrInvalidSequence) Error() string {
-	return string(e)
+	for i, nt := range s {
+		if strings.IndexByte(IupacNucleotideCode, nt) == -1 {
+			return nil, ErrInvalidNucleotide{
+				position: i + 1,
+				sequence: string(s),
+			}
+		}
+	}
+
+	return text(s), nil
+}
+
+type ErrInvalidNucleotide struct {
+	position int
+	sequence string
+}
+
+func (e ErrInvalidNucleotide) Error() string {
+	if e.position == 0 || len(e.sequence) == 0 {
+		panic(fmt.Errorf("TODO: ErrInvalidSequence improperly instantiated: %#v", e))
+	}
+	return fmt.Sprintf("invalid nucleotide %q at position %d in sequence %s", e.sequence[e.position-1], e.position, e.sequence)
+}
+
+func fatalf(fmtMsg string, a ...interface{}) {
+	fmt.Fprintf(os.Stderr, fmtMsg, a)
+	flag.Usage()
+	os.Exit(1)
 }

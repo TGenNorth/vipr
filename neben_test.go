@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"errors"
+	"index/suffixarray"
 	"reflect"
 	"testing"
 )
@@ -264,6 +266,299 @@ func TestReverseComplement(t *testing.T) {
 		//if rc, err := reverseComplement(tt.in); err != tt.err || !bytes.Equal(tt.out, rc) {
 		if rc := reverseComplement(tt.in); !bytes.Equal(tt.out, rc) {
 			t.Errorf("reverseComplement(%q) => %q expected %q\n", tt.in, rc, tt.out)
+		}
+	}
+}
+
+func TestPrimerListSet(t *testing.T) {
+	t.SkipNow()
+	var testtable = []struct {
+		in  string
+		out PrimerList
+		err error
+	}{
+		{"", PrimerList{}, errors.New("expected a filename or list of forward/reverse primers")},
+		{",", PrimerList{}, errors.New("expected a colon delimiting the list of forward primers from the reverse primers")},
+		{":", PrimerList{}, nil},
+		{"#", PrimerList{}, nil},
+		{"$", PrimerList{}, nil},
+		{"invalidCharacters", PrimerList{}, nil},
+		{"invalid:Characters", PrimerList{}, nil},
+		{"GATC:invalidCharacters", PrimerList{}, nil},
+		{"invalidCharacters:GATC", PrimerList{}, nil},
+		{"GATC:", PrimerList{}, nil},
+		{":GATC", PrimerList{}, nil},
+		{"GATC", PrimerList{}, nil},
+		{"GGTT,AACC", PrimerList{}, nil},
+		{"GGTT,AACC:", PrimerList{}, nil},
+		{":GGTT,AACC", PrimerList{}, nil},
+		{":GGTT,AACC:", PrimerList{}, nil},
+		{":GGTT:AACC:", PrimerList{}, nil},
+		{"GGTT AACC", PrimerList{}, nil},
+		{"GGTT\nAACC", PrimerList{}, nil},
+	}
+
+	for _, tt := range testtable {
+		p := PrimerList{}
+		if err := p.Set(tt.in); err != tt.err {
+			t.Errorf("PrimerList.Set(%q) => \"%v\" expected \"%v\"\n", tt.in, err, tt.err)
+		}
+		if !reflect.DeepEqual(p, tt.out) {
+			t.Errorf("PrimerList.Set(%q) %q expected %q\n", tt.in, p, tt.out)
+		}
+	}
+}
+
+func TestProbeSet(t *testing.T) {
+	t.SkipNow()
+	var testtable = []struct {
+		in  string
+		out ProbeFlag
+		err error
+	}{
+		{"", ProbeFlag{}, nil},
+		{",", ProbeFlag{}, nil},
+		{":", ProbeFlag{}, nil},
+		{"#", ProbeFlag{}, nil},
+		{"$", ProbeFlag{}, nil},
+		{"invalidCharacters", ProbeFlag{}, nil},
+		{"invalid:Characters", ProbeFlag{}, nil},
+		{"GATC:invalidCharacters", ProbeFlag{}, nil},
+		{"invalidCharacters:GATC", ProbeFlag{}, nil},
+		{"GATC:", ProbeFlag{}, nil},
+		{":GATC", ProbeFlag{}, nil},
+		{"GATC", ProbeFlag{}, nil},
+		{"GGTT,AACC", ProbeFlag{}, nil},
+		{"GGTT,AACC:", ProbeFlag{}, nil},
+		{":GGTT,AACC", ProbeFlag{}, nil},
+		{":GGTT,AACC:", ProbeFlag{}, nil},
+		{":GGTT:AACC:", ProbeFlag{}, nil},
+		{"GGTT AACC", ProbeFlag{}, nil},
+		{"GGTT\nAACC", ProbeFlag{}, nil},
+	}
+
+	for _, tt := range testtable {
+		p := ProbeFlag{}
+		if err := p.Set(tt.in); err != tt.err {
+			t.Errorf("ProbeFlag.Set(%q) => \"%v\" expected \"%v\"\n", tt.in, err, tt.err)
+		}
+		if !reflect.DeepEqual(p, tt.out) {
+			t.Errorf("ProbeFlag.Set(%q) %q expected %q\n", tt.in, p, tt.out)
+		}
+	}
+}
+
+func TestContigMatchSequenceContainsProbe(t *testing.T) {
+	sequence := []byte("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+	contig := Contig{
+		descriptor: "TestContig",
+		sequence:   sequence,
+		index:      suffixarray.New(sequence),
+	}
+
+	// index is a helper to allow letters to be used as an index in the alphabet.
+	index := func(letter byte) int {
+		return int(letter - 'A')
+	}
+
+	// seq is a helper to express a range as the first and last letter (inclusive)
+	seq := func(a, b byte) []byte {
+		return sequence[index(a) : index(b)+1]
+	}
+
+	var testtable = []struct {
+		desc   string
+		start  int
+		end    int
+		probe  []byte
+		expect bool
+	}{
+		// The following test probes fully inside the sequence:
+		{
+			desc:   "it should accept the empty set of probes (complete contig)",
+			start:  index('A'),
+			end:    index('Z'),
+			probe:  nil,
+			expect: true,
+		}, {
+			desc:   "it should accept the empty set of probes (partial contig)",
+			start:  index('D'),
+			end:    index('W'),
+			probe:  nil,
+			expect: true,
+		}, {
+			desc: "it should accept a probe fully contained within the sequence (complete contig)",
+			// In this variation of the fully contained probe, the start and end index of the sequence
+			// include the entire contig. The result should not be affected by contig boundaries.
+			start: index('A'),
+			end:   index('Z'),
+			// Probe start/end is any point within the sequence and not adjacent to a boundary.
+			probe:  seq('L', 'P'),
+			expect: true,
+		}, {
+			desc: "it should accept a probe fully contained within the sequence (partial contig)",
+			// In this variation of the fully contained probe, the end index is moved
+			// an arbitrary distance from the contig boundary.
+			start: index('D'),
+			end:   index('W'),
+			// Probe start/end is any point within the sequence and not adjacent to a boundary.
+			probe:  seq('L', 'P'),
+			expect: true,
+		}, {
+			desc:   "it should accept a probe that starts at the sequence boundary and ends within the sequence",
+			start:  index('A'),
+			end:    index('C'),
+			probe:  seq('A', 'B'),
+			expect: true,
+		}, {
+			desc:   "it should accept a probe that starts within the sequence and ends at the sequence boundary",
+			start:  'A' - 'A',
+			end:    'C' - 'A',
+			probe:  seq('B', 'C'),
+			expect: true,
+		}, {
+			desc: "it should accept a probe that starts and ends at the sequence boundaries",
+			// start/end is any valid index.
+			start: 'A' - 'A',
+			end:   'C' - 'A',
+			// Probe start/end match the sequence boundaries.
+			probe:  seq('A', 'C'),
+			expect: true,
+		},
+
+		// The following test probes fully outside the sequence.
+		{
+			desc:  "it should not match a probe that starts/ends after the sequence (adjacent)",
+			start: index('A'),
+			end:   index('K'),
+			// Probe start index is adjacent to the sequence boundary.
+			// Probe end any valid index.
+			probe:  seq('L', 'P'),
+			expect: false,
+		}, {
+			desc:  "it should not match a probe that starts/ends after the sequence",
+			start: index('A'),
+			end:   index('K'),
+			// Probe start index is any index after the sequence and not adjacent to the sequence boundary.
+			// Probe end is any valid index.
+			probe:  seq('N', 'P'),
+			expect: false,
+		}, {
+			desc: "it should not match a probe that starts/ends before the sequence (adjacent)",
+			// start/end is any valid index.
+			start: index('L'),
+			end:   index('P'),
+			// Probe start is any valid index.
+			// Probe end is adjacent to the sequence boundary.
+			probe:  seq('A', 'K'),
+			expect: false,
+		}, {
+			desc:  "it should not match a probe that starts/ends before the sequence",
+			start: index('N'),
+			end:   index('P'),
+			// Probe start index is any index after the sequence and not adjacent to the sequence boundary.
+			// Probe end is any valid index.
+			probe:  seq('A', 'K'),
+			expect: false,
+		},
+
+		// The following test probes that cross the sequence boundary.
+		{
+			// TODO: it should not accept a probe that starts before and ends at the start of the sequence.
+			// TODO: it should not accept a probe that starts before and ends within the sequence.
+
+			// The entire probe must be fully contained within the sequence.
+			desc: "it should not match a probe that starts before and ends within the sequence",
+			// start/end is any valid index
+			start: index('B'),
+			end:   index('D'),
+			// Probe start is any valid index before the sequence.
+			// Probe end is any index within the sequence.
+			probe:  seq('A', 'C'),
+			expect: false,
+		}, {
+			desc: "it should not match a probe that starts before and ends on the sequence start boundary",
+			// start/end is any valid index
+			start: index('N'),
+			end:   index('P'),
+			// Probe start index is any valid index before the sequence.
+			// Probe end is any valid index.
+			probe:  seq('A', 'N'),
+			expect: false,
+		}, {
+			desc: "it should not match a probe that starts before and ends on the sequence end boundary",
+			// start/end is any valid index
+			start: index('N'),
+			end:   index('P'),
+			// Probe start index is any valid index before the sequence.
+			// Probe end is any valid index.
+			probe:  seq('A', 'P'),
+			expect: false,
+		}, {
+			desc: "it should not match a probe that starts within the sequence and ends after",
+			// start/end is any valid index
+			start: index('N'),
+			end:   index('P'),
+			// Probe start index is any valid index before the sequence.
+			// Probe end is any valid index.
+			probe:  seq('O', 'Z'),
+			expect: false,
+		}, {
+			desc: "it should not match a probe that starts on the sequence start boundary and ends after",
+			// start/end is any valid index
+			start: index('N'),
+			end:   index('P'),
+			// Probe start index is any valid index before the sequence.
+			// Probe end is any valid index.
+			probe:  seq('N', 'Z'),
+			expect: false,
+		}, {
+			desc: "it should not match a probe that starts on the sequence end boundary and ends after",
+			// start/end is any valid index
+			start: index('N'),
+			end:   index('P'),
+			// Probe start index is any valid index before the sequence.
+			// Probe end is any valid index.
+			probe:  seq('P', 'Z'),
+			expect: false,
+		}, {
+			// TODO: This should not happen unless the user selects an invalid min/max range.
+			// Warn the user the range is too small for the sequences they are using.
+			desc: "it should not match a probe that fully envelopes a sequence.",
+			// start/end is any valid index.
+			start: index('B'),
+			end:   index('Y'),
+			// probe is any range that envelops the start/end index.
+			probe:  seq('A', 'Z'),
+			expect: false,
+		},
+	}
+
+	for i, tt := range testtable {
+		defer func(i int) {
+			if r := recover(); r != nil {
+				t.Errorf("Test #%d sequenceContainsProbe(%q,%q,true) Probe: %q. PANIC: %s. %s.",
+					i, sequence[tt.start], sequence[tt.end], tt.probe, r, tt.desc)
+			}
+		}(i)
+
+		// Cannot use ProbeFlag.Set() because this test is using the an invalid Nucleotide character set
+		// for the sequences which will cause the parser to return an error.
+		probes := ProbeFlag{Probe{
+			Sequence:    tt.probe,
+			Sequences:   []text{tt.probe},
+			RcSequences: []text{tt.probe},
+		}}
+		//if err := probe.Set(string(tt.probe)); err != nil {
+		//	t.Fatalf("Test #%d sequenceContainsProbe(%q,%q,true) ProbeFlag.Set() returned an error: %s\n",
+		//		i, sequence[tt.start], sequence[tt.end], err)
+		//}
+
+		m := NewContigMatch(contig, probes, PrimerList{})
+
+		if result := m.sequenceContainsProbe(tt.start, tt.end, true); result != tt.expect {
+			t.Errorf("Test #%d sequenceContainsProbe(%q,%q,true) %s. Probe: %q Result: %t Want: %t.",
+				i, sequence[tt.start], sequence[tt.end], tt.desc, tt.probe, result, tt.expect)
 		}
 	}
 }
