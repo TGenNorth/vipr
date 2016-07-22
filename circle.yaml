@@ -1,0 +1,7 @@
+test:
+  post:
+      - >
+          go get -u github.com/alecthomas/gometalinter
+          && gometalinter --install --upgrade
+          && gometalinter ./...
+
