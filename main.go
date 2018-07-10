@@ -61,7 +61,34 @@ var (
 	typeFlag              string
 )
 
+//   go build \
+//		-gcflags="-trimpath=$GOPATH" \
+//		-asmflags="-trimpath=$GOPATH" \
+//		-ldflags "-s -w -X main.version $(git describe --always)"
+//
+// The -trimpath flags remove the GOPATH directory prefix from stack traces.
+// The -s -w flags reduce the binary size by discarding debugging symbols.
+//
+// The -X main.version $(git describe --always) flag sets the 'version' variable to the current commit tag (e.g. v1.2.3)
+// If the commit is not tagged, it is set to the first few characters of the commit hash.
+const versionUndefinedError = `
+The 'version' variable was not set when the program was compiled.
+The program is expected to be compiled with a command such as the following:
+  go build -ldflags "-X main.version=$(git describe --always)"
+The -X main.version $(git describe --always) flag sets the 'version' variable to the current commit tag (e.g. v1.2.3)
+If the commit is not tagged, it is set to the first few characters of the commit hash.
+This method allows the git repository to be the Single Source of Truth for version information instead of trying to manually maintain a hardcoded version variable.
+`
+
+var (
+	// version is expected to be initialized at compile time.
+	version      string
+	printVersion bool
+)
+
 func init() {
+	flag.BoolVar(&printVersion, "version", false, "print version")
+
 	// Disable concurrency flags to minimize arguments
 	//flag.UintVar(&contigWorkersFlag, "concurrent-contig", 5, "max pending contigs")
 	//flag.UintVar(&indexWorkersFlag, "concurrent-index", 5, "concurrent contig index builders")
@@ -103,6 +130,16 @@ func main() {
 	}
 	flag.Parse()
 	args := flag.Args()
+
+	if version == "" {
+		// versionUndefinedError is a fatal error because fixing it is trivial compared to noticing it.
+		log.Fatal(versionUndefinedError)
+	}
+
+	if printVersion {
+		fmt.Println(version)
+		return
+	}
 
 	//switch strings.ToLower(profileFlag) {
 	//case "":
