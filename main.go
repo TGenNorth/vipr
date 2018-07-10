@@ -12,16 +12,9 @@ import (
 	"sort"
 	"strings"
 	"unicode"
-
-	"github.com/pkg/profile"
-
-	//"github.com/corburn/neben/fmi"
-	//"github.com/pkg/profile"
-
 	"io"
 	"log"
 	"os"
-	//"strings"
 	"sync"
 	"time"
 )
@@ -69,17 +62,26 @@ var (
 )
 
 func init() {
-	flag.UintVar(&contigWorkersFlag, "concurrent-contig", 5, "max pending contigs")
-	flag.UintVar(&indexWorkersFlag, "concurrent-index", 5, "concurrent contig index builders")
-	flag.UintVar(&searchWorkersFlag, "concurrent-search", 10, "concurrent contig index searches")
+	// Disable concurrency flags to minimize arguments
+	//flag.UintVar(&contigWorkersFlag, "concurrent-contig", 5, "max pending contigs")
+	//flag.UintVar(&indexWorkersFlag, "concurrent-index", 5, "concurrent contig index builders")
+	//flag.UintVar(&searchWorkersFlag, "concurrent-search", 10, "concurrent contig index searches")
+	contigWorkersFlag = 5
+	indexWorkersFlag = 5
+	searchWorkersFlag = 10
+
 	// TODO: do not allow negative
 	flag.IntVar(&minSequenceLengthFlag, "min", 0, "minimum sequence length")
 	flag.IntVar(&maxSequenceLengthFlag, "max", MaxInt, "maximum sequence length")
 	//flag.IntVar(&maxMismatchFlag, "max-mismatch", 0, "")
 	flag.Var(&primersFlag, "primers", "`PrimerList` is a filename or comma delimited list of forward followed by reverse primers to locate in the source contigs")
-	flag.Var(&probeFlag, "probe", "`PROBE` is an optional, comma delimited list of DNA sequences that must be present for an allele to be considered a match")
-	flag.StringVar(&profileFlag, "profile", "", "(dev) enable profiling one of `cpu|mem|block`")
-	flag.StringVar(&typeFlag, "type", "allele", "one of `allele|stat`")
+	// Disable probeFlag until the code is tested
+	//flag.Var(&probeFlag, "probe", "`PROBE` is an optional, comma delimited list of DNA sequences that must be present for an allele to be considered a match")
+	// Disable development profileFlag
+	//flag.StringVar(&profileFlag, "profile", "", "(dev) enable profiling one of `cpu|mem|block`")
+	// Disable typeFlag until the code is tested
+	//flag.StringVar(&typeFlag, "type", "allele", "one of `allele|stat`")
+	typeFlag = "allele"
 	// TODO: support multiple log levels
 	//flag.BoolVar(&debugFlag, "debug", false, "print log messages to stderr")
 
@@ -90,19 +92,6 @@ func init() {
 }
 
 var filename string
-
-//var usageTemplate = `TODO: oneline summary of program purpose
-//Usage:
-//	neben command [arguments]
-//The commands are:
-//{{range .}}{{if .Runnable}}
-//	{{.Name | printf "%-11s"}} {{.Short}}{{end}}{{end}}
-//Use "go help [command]" for more information about a command.
-//Additional help topics:
-//{{range .}}{{if not .Runnable}}
-//	{{.Name | printf "%-11s"}} {{.Short}}{{end}}{{end}}
-//Use "go help [topic]" for more information about that topic.
-//`
 
 func main() {
 	//var err error
@@ -115,17 +104,17 @@ func main() {
 	flag.Parse()
 	args := flag.Args()
 
-	switch strings.ToLower(profileFlag) {
-	case "":
-	case "cpu":
-		defer profile.Start(profile.CPUProfile, profile.ProfilePath(".")).Stop()
-	case "mem":
-		defer profile.Start(profile.MemProfile, profile.ProfilePath(".")).Stop()
-	case "block":
-		defer profile.Start(profile.BlockProfile, profile.ProfilePath(".")).Stop()
-	default:
-		fatalf("invalid profile: %s\n", profileFlag)
-	}
+	//switch strings.ToLower(profileFlag) {
+	//case "":
+	//case "cpu":
+	//	defer profile.Start(profile.CPUProfile, profile.ProfilePath(".")).Stop()
+	//case "mem":
+	//	defer profile.Start(profile.MemProfile, profile.ProfilePath(".")).Stop()
+	//case "block":
+	//	defer profile.Start(profile.BlockProfile, profile.ProfilePath(".")).Stop()
+	//default:
+	//	fatalf("invalid profile: %s\n", profileFlag)
+	//}
 
 	if minSequenceLengthFlag < 0 || maxSequenceLengthFlag < 0 {
 		fatalf("min and max must be positive integers\n")
@@ -162,9 +151,9 @@ func main() {
 		// stdin is from a terminal
 		var err error
 		if len(args) == 0 {
-			fatalf("expected a fasta file either as a commandline argument or piped through stdin")
+			log.Fatal("expected a fasta file either as a commandline argument or piped through stdin")
 		} else if len(args) > 1 {
-			fatalf("unexpected arguments: %v\n", args[1:])
+			log.Fatalf("unexpected arguments: %v\n", args[1:])
 		}
 
 		filename = path.Base(args[0])
@@ -978,7 +967,7 @@ func (e ErrInvalidNucleotide) Error() string {
 }
 
 func fatalf(fmtMsg string, a ...interface{}) {
-	fmt.Fprintf(os.Stderr, fmtMsg, a)
+	fmt.Fprintf(os.Stderr, fmtMsg, a...)
 	flag.Usage()
 	os.Exit(1)
 }

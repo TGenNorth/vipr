@@ -1,0 +1,34 @@
+{% set name = "ViPR" %}
+{% set version = "0.0.1a" %}
+{% set sha256 = "" %}
+
+package:
+  name: '{{ name|lower }}'
+  version: '{{ version }}'
+
+source:
+  url: https://github.com/TGenNorth/isPCR.git
+  sha256: '{{ sha256 }}'
+
+build:
+  number: 0
+  script: go build
+
+requirements:
+  host:
+    - go
+
+test:
+  commands:
+    - vipr --help
+
+about:
+  home: https://github.com/TGenNorth/ViPR
+  license: Unknown
+  license_family: ''
+  license_file: ''
+  summary: VirtualPcR
+
+extra:
+  recipe-maintainers:
+    - corburn
