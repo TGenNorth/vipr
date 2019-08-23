@@ -1,3 +1,5 @@
+[![Go Report Card](https://goreportcard.com/badge/github.com/TGenNorth/vipr)](https://goreportcard.com/report/github.com/TGenNorth/vipr)
+
 # ViPR
 
 Virtual PCR
