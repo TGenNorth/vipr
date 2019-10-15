@@ -1,4 +1,5 @@
 [![Go Report Card](https://goreportcard.com/badge/github.com/TGenNorth/vipr)](https://goreportcard.com/report/github.com/TGenNorth/vipr)
+[![DOI](https://zenodo.org/badge/140470631.svg)](https://zenodo.org/badge/latestdoi/140470631)
 
 # ViPR
 
