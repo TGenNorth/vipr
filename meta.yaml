@@ -7,7 +7,7 @@ package:
   version: '{{ version }}'
 
 source:
-  url: https://github.com/TGenNorth/isPCR.git
+  url: https://github.com/TGenNorth/ViPR.git
   sha256: '{{ sha256 }}'
 
 build:

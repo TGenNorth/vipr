@@ -6,8 +6,8 @@
 Virtual PCR
 
 ```
-# The following is a example of running neben in a directory of fastas
+# The following is a example of running vipr in a directory of fastas
 for assembly_fasta in *.fasta; do
-  neben -min 200 -max 400 -primers <primer_list> [-probe <probe_sequence>] $assembly_fasta >> <output_file>
+  vipr -min 200 -max 400 -primers <primer_list> [-probe <probe_sequence>] $assembly_fasta >> <output_file>
 done
 ```
