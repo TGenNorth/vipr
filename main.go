@@ -49,7 +49,7 @@ const (
 
 var (
 	//debugFlag             bool
-	//maxMismatchFlag int
+	maxMismatchFlag       int
 	contigWorkersFlag     uint
 	indexWorkersFlag      uint
 	searchWorkersFlag     uint
@@ -73,7 +73,7 @@ func init() {
 	// TODO: do not allow negative
 	flag.IntVar(&minSequenceLengthFlag, "min", 0, "minimum sequence length")
 	flag.IntVar(&maxSequenceLengthFlag, "max", MaxInt, "maximum sequence length")
-	//flag.IntVar(&maxMismatchFlag, "max-mismatch", 0, "")
+	flag.IntVar(&maxMismatchFlag, "max-mismatch", 0, "Maximum mismatches allowed")
 	flag.Var(&primersFlag, "primers", "`PrimerList` is a filename or comma delimited list of forward followed by reverse primers to locate in the source contigs")
 	// Disable probeFlag until the code is tested
 	//flag.Var(&probeFlag, "probe", "`PROBE` is an optional, comma delimited list of DNA sequences that must be present for an allele to be considered a match")
@@ -464,14 +464,14 @@ func (m *ContigMatch) addPrimer(primer Primer, isForward bool) {
 		//for _, idx := range m.contig.index.Lookup(sequence, -1) {
 		//	primerMatch.indices[idx] = struct{}{}
 		//}
-		primerMatch.indices = append(primerMatch.indices, m.contig.index.Lookup(sequence, -1)...)
+		primerMatch.indices = append(primerMatch.indices, m.contig.index.Lookup(sequence, maxMismatchFlag)...)
 	}
 
 	for _, sequence := range primer.RcSequences {
 		//for _, idx := range m.contig.index.Lookup(sequence, -1) {
 		//	primerMatch.rcIndices[idx] = struct{}{}
 		//}
-		primerMatch.rcIndices = append(primerMatch.rcIndices, m.contig.index.Lookup(sequence, -1)...)
+		primerMatch.rcIndices = append(primerMatch.rcIndices, m.contig.index.Lookup(sequence, maxMismatchFlag)...)
 	}
 
 	if isForward {
