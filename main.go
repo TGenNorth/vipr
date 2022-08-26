@@ -58,6 +58,8 @@ var (
 	maxSequenceLengthFlag int
 	minSequenceLengthFlag int
 	primersFlag           PrimerList
+	primersForwardFastaFlag       string
+	primersReverseFastaFlag       string
 	probeFlag             ProbeFlag
 	profileFlag           string
 	typeFlag              string
@@ -79,6 +81,8 @@ func init() {
 	flag.IntVar(&maxSequenceLengthFlag, "max", MaxInt, "maximum sequence length")
 	flag.IntVar(&maxMismatchFlag, "max-mismatch", 0, "Maximum mismatches allowed")
 	flag.Var(&primersFlag, "primers", "`PrimerList` is a filename or comma delimited list of forward followed by reverse primers to locate in the source contigs")
+	flag.StringVar(&primersForwardFastaFlag, "forward-fasta-primers", "", "A filename for forward primers")
+	flag.StringVar(&primersReverseFastaFlag, "reverse-fasta-primers", "", "A filename for reverse primers")
 	// Disable probeFlag until the code is tested
 	//flag.Var(&probeFlag, "probe", "`PROBE` is an optional, comma delimited list of DNA sequences that must be present for an allele to be considered a match")
 	// Disable development profileFlag
@@ -94,17 +98,27 @@ func init() {
 	flag.Lookup("primers").DefValue = ""
 
 	flag.StringVar(&regexJsonFileFlag, "regex-json", "./regex_vipr.json", "file to pull or write regex to for continous use across files")
-	seqToRegexMap = make(map[string][]string)
-	if _, err := os.Stat(regexJsonFileFlag); err == nil {
-		// read our opened jsonFile as a byte array.
-		byteValue, _ := ioutil.ReadFile(regexJsonFileFlag)
-		// we unmarshal our byteArray which contains our
-		// jsonFile's content into 'seqToRegexMap' which we defined as a flag
-		json.Unmarshal(byteValue, &seqToRegexMap)
-	}
 }
 
 var filename string
+
+func contains(s []text, e text) bool {
+  for _, a := range s {
+      if string(a) == string(e) {
+          return true
+      }
+  }
+  return false
+}
+
+func intContained(s []int, e int) bool {
+  for _, a := range s {
+      if a == e {
+          return true
+      }
+  }
+  return false
+}
 
 func main() {
 	//var err error
@@ -132,6 +146,22 @@ func main() {
 	if minSequenceLengthFlag < 0 || maxSequenceLengthFlag < 0 {
 		fatalf("min and max must be positive integers\n")
 	}
+
+	seqToRegexMap = make(map[string][]string)
+	if _, err := os.Stat(regexJsonFileFlag); err == nil {
+		// read our opened jsonFile as a byte array.
+		byteValue, _ := ioutil.ReadFile(regexJsonFileFlag)
+		// we unmarshal our byteArray which contains our
+		// jsonFile's content into 'seqToRegexMap' which we defined as a flag
+		json.Unmarshal(byteValue, &seqToRegexMap)
+	}
+
+	// if forward and reverse rpimer flag were set
+	// check that the files are valid
+	// create a map of primer to name for each primer in primerFlag
+	// if primersFlag is empty use these primers to create it
+
+	// if primersFlag is bad, throw err
 
 	//if !debugFlag {
 	//log.SetOutput(ioutil.Discard)
@@ -183,30 +213,109 @@ func main() {
 	// Build suffix array
 	go suffixarrayWorkers(indexChan, sequenceChan, int(indexWorkersFlag))
 
-	// Build seq to regex map
+	newPrimerFlag := primersFlag
+
+	// Build seq to regex map into the primer lists
 	for i := range primersFlag.forward {
 		for _, sequence := range primersFlag.forward[i].Sequences {
 			// Regex Match
 			var regexList []string
 			if _, ok := seqToRegexMap[string(sequence)]; ok {
+				for _, sequence := range seqToRegexMap[string(sequence)] {
+					if strings.Count(sequence,"{") <= maxMismatchFlag {
+						if !contains(newPrimerFlag.forward[i].Sequences, text(sequence)) {
+							newPrimerFlag.forward[i].Sequences = append(newPrimerFlag.forward[i].Sequences, text(sequence))
+						}
+					}
+				}
 				continue
 			}else{
 				regexList = getAllRegexStr(string(sequence), maxMismatchFlag)
 				seqToRegexMap[string(sequence)] = regexList
+				for _, sequence := range seqToRegexMap[string(sequence)] {
+					if strings.Count(sequence,"{") <= maxMismatchFlag {
+						if !contains(newPrimerFlag.forward[i].Sequences, text(sequence)) {
+							newPrimerFlag.forward[i].Sequences = append(newPrimerFlag.forward[i].Sequences, text(sequence))
+						}
+					}
+				}
+			}
+		}
+		for _, sequence := range primersFlag.forward[i].RcSequences {
+			var regexList []string
+			if _, ok := seqToRegexMap[string(sequence)]; ok {
+				for _, sequence := range seqToRegexMap[string(sequence)] {
+					if strings.Count(sequence,"{") <= maxMismatchFlag {
+						if !contains(newPrimerFlag.forward[i].Sequences, text(sequence)) {
+							newPrimerFlag.forward[i].RcSequences = append(newPrimerFlag.forward[i].RcSequences, text(sequence))
+						}
+					}
+				}
+				continue
+			}else{
+				regexList = getAllRegexStr(string(sequence), maxMismatchFlag)
+				seqToRegexMap[string(sequence)] = regexList
+				for _, sequence := range seqToRegexMap[string(sequence)] {
+					if strings.Count(sequence,"{") <= maxMismatchFlag {
+						if !contains(newPrimerFlag.forward[i].Sequences, text(sequence)) {
+							newPrimerFlag.forward[i].RcSequences = append(newPrimerFlag.forward[i].RcSequences, text(sequence))
+						}
+					}
+				}
 			}
 		}
 	}
+
 	for i := range primersFlag.reverse {
 		for _, sequence := range primersFlag.reverse[i].Sequences {
 			var regexList []string
 			if _, ok := seqToRegexMap[string(sequence)]; ok {
+				for _, sequence := range seqToRegexMap[string(sequence)] {
+					if strings.Count(sequence,"{") <= maxMismatchFlag {
+						if !contains(newPrimerFlag.reverse[i].Sequences, text(sequence)) {
+							newPrimerFlag.reverse[i].Sequences = append(newPrimerFlag.reverse[i].Sequences, text(sequence))
+						}
+					}
+				}
 				continue
 			}else{
 				regexList = getAllRegexStr(string(sequence), maxMismatchFlag)
 				seqToRegexMap[string(sequence)] = regexList
+				for _, sequence := range seqToRegexMap[string(sequence)] {
+					if strings.Count(sequence,"{") <= maxMismatchFlag {
+						if !contains(newPrimerFlag.reverse[i].Sequences, text(sequence)) {
+							newPrimerFlag.reverse[i].Sequences = append(newPrimerFlag.reverse[i].Sequences, text(sequence))
+						}
+					}
+				}
+			}
+		}
+		for _, sequence := range primersFlag.reverse[i].RcSequences {
+			var regexList []string
+			if _, ok := seqToRegexMap[string(sequence)]; ok {
+				for _, sequence := range seqToRegexMap[string(sequence)] {
+					if strings.Count(sequence,"{") <= maxMismatchFlag {
+						if !contains(newPrimerFlag.reverse[i].RcSequences, text(sequence)) {
+							newPrimerFlag.reverse[i].RcSequences = append(newPrimerFlag.reverse[i].RcSequences, text(sequence))
+						}
+					}
+				}
+				continue
+			}else{
+				regexList = getAllRegexStr(string(sequence), maxMismatchFlag)
+				seqToRegexMap[string(sequence)] = regexList
+				for _, sequence := range seqToRegexMap[string(sequence)] {
+					if strings.Count(sequence,"{") <= maxMismatchFlag {
+						if !contains(newPrimerFlag.reverse[i].RcSequences, text(sequence)) {
+							newPrimerFlag.reverse[i].RcSequences = append(newPrimerFlag.reverse[i].RcSequences, text(sequence))
+						}
+					}
+				}
 			}
 		}
 	}
+
+	primersFlag = newPrimerFlag
 
 	jsonStr, jsonErr := json.Marshal(seqToRegexMap)
 	if jsonErr != nil {
@@ -346,8 +455,18 @@ func writeMatches(w io.Writer, matchChan chan ContigMatch, minLen, maxLen int) {
 						}
 						start := fIdx
 						end := rIdx + len(rev.primer.Sequence)
-						fmt.Fprintf(w, "+\t%s\t%s\t%s\t%d\t%d\t%d\t%s\t%s\n", fwd.primer.Label, rev.primer.Label, match.contig.sequence[start:end], start, end, end-start, filename, contigIdentifier)
-
+						fwdStartSeqMatches := fwd.matchRegex[fIdx]
+						// fwdEndSeqMatches := fwd.matchRegex[rIdx]
+						// fwdRStartSeqMatches := fwd.rMatchRegex[fIdx]
+						// fwdREndSeqMatches := fwd.rMatchRegex[rIdx]
+						// revStartSeqMatches := rev.matchRegex[fIdx]
+						// revEndSeqMatches := rev.matchRegex[rIdx]
+						// revRStartSeqMatches := rev.rMatchRegex[fIdx]
+						revREndSeqMatches := rev.rMatchRegex[rIdx]
+						if (end-start) < 1001 {
+							fmt.Fprintf(w, "MATCHES\t%d\t%d\n", fwdStartSeqMatches, revREndSeqMatches)
+							fmt.Fprintf(w, "+\t%s\t%s\t%s\t%d\t%d\t%d\t%s\t%s\n\n", fwd.primer.Label, rev.primer.Label, match.contig.sequence[start:end], start, end, end-start, filename, contigIdentifier)
+						}
 					}
 				}
 				//for fIdx := range fwd.rcIndices {
@@ -359,8 +478,19 @@ func writeMatches(w io.Writer, matchChan chan ContigMatch, minLen, maxLen int) {
 						}
 						start := rIdx
 						end := fIdx + len(fwd.primer.Sequence)
-						rcSequence := reverseComplement(match.contig.sequence[start:end])
-						fmt.Fprintf(w, "-\t%s\t%s\t%s\t%d\t%d\t%d\t%s\t%s\n", fwd.primer.Label, rev.primer.Label, rcSequence, start, end, end-start, filename, contigIdentifier)
+						// fwdStartSeqMatches := fwd.matchRegex[fIdx]
+						// fwdEndSeqMatches := fwd.matchRegex[rIdx]
+						fwdRStartSeqMatches := fwd.rMatchRegex[fIdx]
+						// fwdREndSeqMatches := fwd.rMatchRegex[rIdx]
+						// revStartSeqMatches := rev.matchRegex[fIdx]
+						revEndSeqMatches := rev.matchRegex[rIdx]
+						// revRStartSeqMatches := rev.rMatchRegex[fIdx]
+						// revREndSeqMatches := rev.rMatchRegex[rIdx]
+						if (end-start) < 1001 {
+							fmt.Fprintf(w, "MATCHES\t%d\t%d\n", fwdRStartSeqMatches, revEndSeqMatches)
+							rcSequence := reverseComplement(match.contig.sequence[start:end])
+							fmt.Fprintf(w, "-\t%s\t%s\t%s\t%d\t%d\t%d\t%s\t%s\n\n", fwd.primer.Label, rev.primer.Label, rcSequence, start, end, end-start, filename, contigIdentifier)
+						}
 					}
 				}
 			}
@@ -432,8 +562,10 @@ type PrimerMatch struct {
 	primer Primer
 	//indices   map[int]struct{}
 	//rcIndices map[int]struct{}
-	indices   []int
-	rcIndices []int
+	indices    []int
+	matchRegex map[int][]string
+	rcIndices  []int
+	rMatchRegex map[int][]string
 }
 
 func (c PrimerMatch) String() string {
@@ -459,69 +591,83 @@ func NewContigMatch(contig Contig, probes ProbeFlag, primers PrimerList) *Contig
 	var probeForward, probeReverse []int
 	for _, probe := range probes {
 		for i := range probe.Sequences {
-			//Exact match check
-			probeForward = append(probeForward, contig.index.Lookup(probe.Sequences[i], -1)...)
-			//Regex check for mismatches
-			var regexList []string
-			if _, ok := seqToRegexMap[string(probe.Sequences[i])]; ok {
-				regexList = seqToRegexMap[string(probe.Sequences[i])]
-			}else{
-				regexList = getAllRegexStr(string(probe.Sequences[i]), maxMismatchFlag)
-				seqToRegexMap[string(probe.Sequences[i])] = regexList
+			regexpFinal, _ := regexp.Compile(string(probe.Sequences[i]))
+			//log.Printf("Checking Regex:\n%v\n", regexpFinal)
+			mismatchInds := contig.index.FindAllIndex(regexpFinal, -1)
+			//log.Printf("Mismatch Ind List:\n%v\n", mismatchInds)
+			for _, indxPair := range mismatchInds {
+				probeForward = append(probeForward, indxPair[0])
 			}
-			//log.Printf("Got rgex of:\n%v\n", regexList)
-			for _, regexStr := range regexList {
-				regexpFinal, _ := regexp.Compile(regexStr)
-				//log.Printf("Checking Regex:\n%v\n", regexpFinal)
-				mismatchInds := contig.index.FindAllIndex(regexpFinal, -1)
-				//log.Printf("Mismatch Ind List:\n%v\n", mismatchInds)
-				for _, indxPair := range mismatchInds {
-					found := false
-					for _, existingLoc := range probeForward {
-						if existingLoc == indxPair[0] {
-							found = true
-							break
-						}
-					}
-					if !found {
-						probeForward = append(probeForward, indxPair[0])
-					}
-				}
-			}
+			// //Exact match check
+			// probeForward = append(probeForward, contig.index.Lookup(probe.Sequences[i], -1)...)
+			// //Regex check for mismatches
+			// var regexList []string
+			// if _, ok := seqToRegexMap[string(probe.Sequences[i])]; ok {
+			// 	regexList = seqToRegexMap[string(probe.Sequences[i])]
+			// }else{
+			// 	regexList = getAllRegexStr(string(probe.Sequences[i]), maxMismatchFlag)
+			// 	seqToRegexMap[string(probe.Sequences[i])] = regexList
+			// }
+			// //log.Printf("Got rgex of:\n%v\n", regexList)
+			// for _, regexStr := range regexList {
+			// 	regexpFinal, _ := regexp.Compile(regexStr)
+			// 	//log.Printf("Checking Regex:\n%v\n", regexpFinal)
+			// 	mismatchInds := contig.index.FindAllIndex(regexpFinal, -1)
+			// 	//log.Printf("Mismatch Ind List:\n%v\n", mismatchInds)
+			// 	for _, indxPair := range mismatchInds {
+			// 		// found := false
+			// 		for _, existingLoc := range probeForward {
+			// 			if existingLoc == indxPair[0] {
+			// 				// found = true
+			// 				break
+			// 			}
+			// 		}
+			// 		if true {
+			// 			probeForward = append(probeForward, indxPair[0])
+			// 		}
+			// 	}
+			// }
 
 		}
 
 		for i := range probe.RcSequences {
-			//Exact Match check
-			probeReverse = append(probeReverse, contig.index.Lookup(probe.RcSequences[i], -1)...)
-
-			//Regex check for mismatches
-			var regexList []string
-			if _, ok := seqToRegexMap[string(probe.RcSequences[i])]; ok {
-				regexList = seqToRegexMap[string(probe.RcSequences[i])]
-			}else{
-				regexList = getAllRegexStr(string(probe.RcSequences[i]), maxMismatchFlag)
-				seqToRegexMap[string(probe.RcSequences[i])] = regexList
+			regexpFinal, _ := regexp.Compile(string(probe.RcSequences[i]))
+			//log.Printf("Checking Regex:\n%v\n", regexpFinal)
+			mismatchInds := contig.index.FindAllIndex(regexpFinal, -1)
+			//log.Printf("Mismatch Ind List:\n%v\n", mismatchInds)
+			for _, indxPair := range mismatchInds {
+				probeReverse = append(probeReverse, indxPair[0])
 			}
-			//log.Printf("Got rgex of:\n%v\n", regexList)
-			for _, regexStr := range regexList {
-				regexpFinal, _ := regexp.Compile(regexStr)
-				//log.Printf("Checking Regex:\n%v\n", regexpFinal)
-				mismatchInds := contig.index.FindAllIndex(regexpFinal, -1)
-				//log.Printf("Mismatch Ind List:\n%v\n", mismatchInds)
-				for _, indxPair := range mismatchInds {
-					found := false
-					for _, existingLoc := range probeReverse {
-						if existingLoc == indxPair[0] {
-							found = true
-							break
-						}
-					}
-					if !found {
-						probeReverse = append(probeReverse, indxPair[0])
-					}
-				}
-			}
+			// //Exact Match check
+			// probeReverse = append(probeReverse, contig.index.Lookup(probe.RcSequences[i], -1)...)
+			//
+			// //Regex check for mismatches
+			// var regexList []string
+			// if _, ok := seqToRegexMap[string(probe.RcSequences[i])]; ok {
+			// 	regexList = seqToRegexMap[string(probe.RcSequences[i])]
+			// }else{
+			// 	regexList = getAllRegexStr(string(probe.RcSequences[i]), maxMismatchFlag)
+			// 	seqToRegexMap[string(probe.RcSequences[i])] = regexList
+			// }
+			// //log.Printf("Got rgex of:\n%v\n", regexList)
+			// for _, regexStr := range regexList {
+			// 	regexpFinal, _ := regexp.Compile(regexStr)
+			// 	//log.Printf("Checking Regex:\n%v\n", regexpFinal)
+			// 	mismatchInds := contig.index.FindAllIndex(regexpFinal, -1)
+			// 	//log.Printf("Mismatch Ind List:\n%v\n", mismatchInds)
+			// 	for _, indxPair := range mismatchInds {
+			// 		// found := false
+			// 		for _, existingLoc := range probeReverse {
+			// 			if existingLoc == indxPair[0] {
+			// 				// found = true
+			// 				break
+			// 			}
+			// 		}
+			// 		if true {
+			// 			probeReverse = append(probeReverse, indxPair[0])
+			// 		}
+			// 	}
+			// }
 
 		}
 	}
@@ -630,83 +776,113 @@ func (m *ContigMatch) addPrimer(primer Primer, isForward bool) {
 		//indices:   make(map[int]struct{}),
 		//rcIndices: make(map[int]struct{}),
 		indices:   []int{},
+		matchRegex:   make(map[int][]string),
 		rcIndices: []int{},
+		rMatchRegex:   make(map[int][]string),
 	}
+
+	// primerMatch.matchRegex = make(map[int][]string)
+	// primerMatch.rMatchRegex = make(map[int][]string)
 
 	for _, sequence := range primer.Sequences {
 		//for _, idx := range m.contig.index.Lookup(sequence, -1) {
 		//	primerMatch.indices[idx] = struct{}{}
 		//}
 		// log.Printf("Checking Seq:\n%s\n", sequence)
-		// Exact match
-		primerMatch.indices = append(primerMatch.indices, m.contig.index.Lookup(sequence, -1)...)
-		// Regex Match
-		var regexList []string
-		if _, ok := seqToRegexMap[string(sequence)]; ok {
-			regexList = seqToRegexMap[string(sequence)]
-		}else{
-			regexList = getAllRegexStr(string(sequence), maxMismatchFlag)
-			seqToRegexMap[string(sequence)] = regexList
+
+		regexpFinal, _ := regexp.Compile(string(sequence))
+		//log.Printf("Checking Regex:\n%v\n", regexpFinal)
+		mismatchInds := m.contig.index.FindAllIndex(regexpFinal, -1)
+		//log.Printf("Mismatch Ind List:\n%v\n", mismatchInds)
+		for _, indxPair := range mismatchInds {
+			if !intContained(primerMatch.indices, indxPair[0]) {
+				primerMatch.indices = append(primerMatch.indices, indxPair[0])
+			}
+			primerMatch.matchRegex[indxPair[0]] = append(primerMatch.matchRegex[indxPair[0]], string(sequence))
 		}
 
-		// log.Printf("Got rgex of:\n%v\n", regexList)
-		for _, regexStr := range regexList {
-			regexpFinal, _ := regexp.Compile(regexStr)
-			//log.Printf("Checking Regex:\n%v\n", regexpFinal)
-			mismatchInds := m.contig.index.FindAllIndex(regexpFinal, -1)
-			//log.Printf("Mismatch Ind List:\n%v\n", mismatchInds)
-			// Only include new indexes to avoid repeats
-			for _, indxPair := range mismatchInds {
-				found := false
-				for _, existingLoc := range primerMatch.indices {
-					if existingLoc == indxPair[0] {
-						found = true
-						break
-					}
-				}
-				if !found {
-					// log.Printf("New Mismatch found:\n%v\n", regexpFinal)
-					primerMatch.indices = append(primerMatch.indices, indxPair[0])
-				}
-			}
-		}
+		// // Exact match
+		// primerMatch.indices = append(primerMatch.indices, m.contig.index.Lookup(sequence, -1)...)
+		// // Regex Match
+		// var regexList []string
+		// if _, ok := seqToRegexMap[string(sequence)]; ok {
+		// 	regexList = seqToRegexMap[string(sequence)]
+		// }else{
+		// 	regexList = getAllRegexStr(string(sequence), maxMismatchFlag)
+		// 	seqToRegexMap[string(sequence)] = regexList
+		// }
+		//
+		// // log.Printf("Got rgex of:\n%v\n", regexList)
+		// for _, regexStr := range regexList {
+		// 	regexpFinal, _ := regexp.Compile(regexStr)
+		// 	//log.Printf("Checking Regex:\n%v\n", regexpFinal)
+		// 	mismatchInds := m.contig.index.FindAllIndex(regexpFinal, -1)
+		// 	//log.Printf("Mismatch Ind List:\n%v\n", mismatchInds)
+		// 	// Only include new indexes to avoid repeats
+		// 	for _, indxPair := range mismatchInds {
+		// 		// found := false
+		// 		for _, existingLoc := range primerMatch.indices {
+		// 			if existingLoc == indxPair[0] {
+		// 				// found = true
+		// 				break
+		// 			}
+		// 		}
+		// 		if true {
+		// 			// log.Printf("New Mismatch found:\n%v\n", regexpFinal)
+		// 			primerMatch.indices = append(primerMatch.indices, indxPair[0])
+		// 		}
+		// 	}
+		// }
+
 	}
 
 	for _, sequence := range primer.RcSequences {
 		//for _, idx := range m.contig.index.Lookup(sequence, -1) {
 		//	primerMatch.rcIndices[idx] = struct{}{}
 		//}
-		// Exact Match
-		primerMatch.rcIndices = append(primerMatch.rcIndices, m.contig.index.Lookup(sequence, -1)...)
-		// Regex Match
-		var regexList []string
-		if _, ok := seqToRegexMap[string(sequence)]; ok {
-			regexList = seqToRegexMap[string(sequence)]
-		}else{
-			regexList = getAllRegexStr(string(sequence), maxMismatchFlag)
-			seqToRegexMap[string(sequence)] = regexList
-		}
-		// log.Printf("Got rgex of:\n%v\n", regexList)
-		for _, regexStr := range regexList {
-			regexpFinal, _ := regexp.Compile(regexStr)
-			//log.Printf("Checking Regex:\n%v\n", regexpFinal)
-			mismatchInds := m.contig.index.FindAllIndex(regexpFinal, -1)
-			//log.Printf("Mismatch Ind List:\n%v\n", mismatchInds)
-			// Only include new indexes to avoid repeats
-			for _, indxPair := range mismatchInds {
-				found := false
-				for _, existingLoc := range primerMatch.rcIndices {
-					if existingLoc == indxPair[0] {
-						found = true
-						break
-					}
-				}
-				if !found {
-					// log.Printf("New Mismatch found:\n%v\n", regexpFinal)
-					primerMatch.rcIndices = append(primerMatch.rcIndices, indxPair[0])
-				}
+
+		regexpFinal, _ := regexp.Compile(string(sequence))
+		//log.Printf("Checking Regex:\n%v\n", regexpFinal)
+		mismatchInds := m.contig.index.FindAllIndex(regexpFinal, -1)
+		//log.Printf("Mismatch Ind List:\n%v\n", mismatchInds)
+		for _, indxPair := range mismatchInds {
+			if !intContained(primerMatch.rcIndices, indxPair[0]) {
+				primerMatch.rcIndices = append(primerMatch.rcIndices, indxPair[0])
 			}
+			primerMatch.rMatchRegex[indxPair[0]] = append(primerMatch.rMatchRegex[indxPair[0]], string(sequence))
 		}
+
+		// // Exact Match
+		// primerMatch.rcIndices = append(primerMatch.rcIndices, m.contig.index.Lookup(sequence, -1)...)
+		// // Regex Match
+		// var regexList []string
+		// if _, ok := seqToRegexMap[string(sequence)]; ok {
+		// 	regexList = seqToRegexMap[string(sequence)]
+		// }else{
+		// 	regexList = getAllRegexStr(string(sequence), maxMismatchFlag)
+		// 	seqToRegexMap[string(sequence)] = regexList
+		// }
+		// // log.Printf("Got rgex of:\n%v\n", regexList)
+		// for _, regexStr := range regexList {
+		// 	regexpFinal, _ := regexp.Compile(regexStr)
+		// 	//log.Printf("Checking Regex:\n%v\n", regexpFinal)
+		// 	mismatchInds := m.contig.index.FindAllIndex(regexpFinal, -1)
+		// 	//log.Printf("Mismatch Ind List:\n%v\n", mismatchInds)
+		// 	// Only include new indexes to avoid repeats
+		// 	for _, indxPair := range mismatchInds {
+		// 		// found := false
+		// 		for _, existingLoc := range primerMatch.rcIndices {
+		// 			if existingLoc == indxPair[0] {
+		// 				// found = true
+		// 				break
+		// 			}
+		// 		}
+		// 		if true {
+		// 			// log.Printf("New Mismatch found:\n%v\n", regexpFinal)
+		// 			primerMatch.rcIndices = append(primerMatch.rcIndices, indxPair[0])
+		// 		}
+		// 	}
+		// }
 	}
 
 	if isForward {
