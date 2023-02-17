@@ -8,17 +8,17 @@ import (
 	"flag"
 	"fmt"
 	"index/suffixarray"
-	"path"
-	"sort"
-	"strings"
-	"unicode"
 	"io"
+	"io/ioutil"
 	"log"
 	"os"
+	"path"
+	"regexp"
+	"sort"
+	"strings"
 	"sync"
 	"time"
-	"regexp"
-	"io/ioutil"
+	"unicode"
 )
 
 /*
@@ -50,21 +50,21 @@ const (
 )
 
 var (
-	//debugFlag             bool
-	maxMismatchFlag       int
-	contigWorkersFlag     uint
-	indexWorkersFlag      uint
-	searchWorkersFlag     uint
-	maxSequenceLengthFlag int
-	minSequenceLengthFlag int
-	primersFlag           PrimerList
-	primersForwardFastaFlag       string
-	primersReverseFastaFlag       string
-	probeFlag             ProbeFlag
-	profileFlag           string
-	typeFlag              string
-	regexJsonFileFlag     string
-	seqToRegexMap         map[string][]string
+	debugFlag               bool
+	maxMismatchFlag         int
+	contigWorkersFlag       uint
+	indexWorkersFlag        uint
+	searchWorkersFlag       uint
+	maxSequenceLengthFlag   int
+	minSequenceLengthFlag   int
+	primersFlag             PrimerList
+	primersForwardFastaFlag string
+	primersReverseFastaFlag string
+	probeFlag               ProbeFlag
+	profileFlag             string
+	typeFlag                string
+	regexJsonFileFlag       string
+	seqToRegexMap           map[string][]string
 )
 
 func init() {
@@ -90,7 +90,7 @@ func init() {
 	// Disable typeFlag until the code is tested
 	flag.StringVar(&typeFlag, "type", "allele", "one of `allele|stat`")
 	// TODO: support multiple log levels
-	//flag.BoolVar(&debugFlag, "debug", false, "print log messages to stderr")
+	flag.BoolVar(&debugFlag, "debug", false, "print log messages to stderr")
 
 	// By default, the flag package will render the usage message default value from the type String() method.
 	// The PrimerList.String() is useful for debugging, not as a usage message default value.
@@ -103,34 +103,39 @@ func init() {
 var filename string
 
 func textContained(s []text, e text) bool {
-  for _, a := range s {
-      if string(a) == string(e) {
-          return true
-      }
-  }
-  return false
+	for _, a := range s {
+		if string(a) == string(e) {
+			return true
+		}
+	}
+	return false
 }
 
 func intContained(s []int, e int) bool {
-  for _, a := range s {
-      if a == e {
-          return true
-      }
-  }
-  return false
+	for _, a := range s {
+		if a == e {
+			return true
+		}
+	}
+	return false
 }
 
 func strContained(s []string, e string) bool {
-  for _, a := range s {
-      if a == e {
-          return true
-      }
-  }
-  return false
+	for _, a := range s {
+		if a == e {
+			return true
+		}
+	}
+	return false
 }
 
-
 func main() {
+	start := time.Now()
+	// Code to measure
+	duration := time.Since(start)
+	if debugFlag {
+		log.Println("Main Started: ", duration)
+	}
 	//var err error
 
 	flag.Usage = func() {
@@ -157,6 +162,10 @@ func main() {
 		fatalf("min and max must be positive integers\n")
 	}
 
+	if debugFlag {
+		log.Println("Start input Regex map loading: ", duration)
+	}
+
 	seqToRegexMap = make(map[string][]string)
 	if _, err := os.Stat(regexJsonFileFlag); err == nil {
 		// read our opened jsonFile as a byte array.
@@ -164,6 +173,10 @@ func main() {
 		// we unmarshal our byteArray which contains our
 		// jsonFile's content into 'seqToRegexMap' which we defined as a flag
 		json.Unmarshal(byteValue, &seqToRegexMap)
+	}
+
+	if debugFlag {
+		log.Println("End input Regex map loading: ", duration)
 	}
 
 	// if forward and reverse rpimer flag were set
@@ -188,6 +201,14 @@ func main() {
 	sequenceChan := make(chan *Contig, contigWorkersFlag)
 	indexChan := make(chan Contig, indexWorkersFlag)
 	matchChan := make(chan ContigMatch, searchWorkersFlag)
+
+	if debugFlag {
+		log.Println("Made worker channels: ", duration)
+	}
+
+	if debugFlag {
+		log.Println("Start read of fasta: ", duration)
+	}
 
 	// Read from either a fasta file
 	var sequenceFile *os.File
@@ -218,10 +239,32 @@ func main() {
 		defer sequenceFile.Close()
 	}
 
+	if debugFlag {
+		log.Println("Got fasta file path: ", duration)
+		log.Println("File: ", sequenceFile)
+	}
+
 	go readFasta(sequenceChan, sequenceFile)
+
+	if debugFlag {
+		log.Println("End read of fasta: ", duration)
+	}
+
+	if debugFlag {
+		log.Println("Start construction of suffix array: ", duration)
+		log.Println("# of workers: ", indexWorkersFlag)
+	}
 
 	// Build suffix array
 	go suffixarrayWorkers(indexChan, sequenceChan, int(indexWorkersFlag))
+
+	if debugFlag {
+		log.Println("End construction of suffix array: ", duration)
+	}
+
+	if debugFlag {
+		log.Println("Start construction of Regex map: ", duration)
+	}
 
 	newPrimerFlag := primersFlag
 
@@ -232,18 +275,18 @@ func main() {
 			var regexList []string
 			if _, ok := seqToRegexMap[string(sequence)]; ok {
 				for _, sequence := range seqToRegexMap[string(sequence)] {
-					if strings.Count(sequence,"{") <= maxMismatchFlag {
+					if strings.Count(sequence, "{") <= maxMismatchFlag {
 						if !textContained(newPrimerFlag.forward[i].Sequences, text(sequence)) {
 							newPrimerFlag.forward[i].Sequences = append(newPrimerFlag.forward[i].Sequences, text(sequence))
 						}
 					}
 				}
 				continue
-			}else{
+			} else {
 				regexList = getAllRegexStr(string(sequence), maxMismatchFlag)
 				seqToRegexMap[string(sequence)] = regexList
 				for _, sequence := range seqToRegexMap[string(sequence)] {
-					if strings.Count(sequence,"{") <= maxMismatchFlag {
+					if strings.Count(sequence, "{") <= maxMismatchFlag {
 						if !textContained(newPrimerFlag.forward[i].Sequences, text(sequence)) {
 							newPrimerFlag.forward[i].Sequences = append(newPrimerFlag.forward[i].Sequences, text(sequence))
 						}
@@ -255,18 +298,18 @@ func main() {
 			var regexList []string
 			if _, ok := seqToRegexMap[string(sequence)]; ok {
 				for _, sequence := range seqToRegexMap[string(sequence)] {
-					if strings.Count(sequence,"{") <= maxMismatchFlag {
+					if strings.Count(sequence, "{") <= maxMismatchFlag {
 						if !textContained(newPrimerFlag.forward[i].Sequences, text(sequence)) {
 							newPrimerFlag.forward[i].RcSequences = append(newPrimerFlag.forward[i].RcSequences, text(sequence))
 						}
 					}
 				}
 				continue
-			}else{
+			} else {
 				regexList = getAllRegexStr(string(sequence), maxMismatchFlag)
 				seqToRegexMap[string(sequence)] = regexList
 				for _, sequence := range seqToRegexMap[string(sequence)] {
-					if strings.Count(sequence,"{") <= maxMismatchFlag {
+					if strings.Count(sequence, "{") <= maxMismatchFlag {
 						if !textContained(newPrimerFlag.forward[i].Sequences, text(sequence)) {
 							newPrimerFlag.forward[i].RcSequences = append(newPrimerFlag.forward[i].RcSequences, text(sequence))
 						}
@@ -276,23 +319,27 @@ func main() {
 		}
 	}
 
+	if debugFlag {
+		log.Println("Forward regex done: ", duration)
+	}
+
 	for i := range primersFlag.reverse {
 		for _, sequence := range primersFlag.reverse[i].Sequences {
 			var regexList []string
 			if _, ok := seqToRegexMap[string(sequence)]; ok {
 				for _, sequence := range seqToRegexMap[string(sequence)] {
-					if strings.Count(sequence,"{") <= maxMismatchFlag {
+					if strings.Count(sequence, "{") <= maxMismatchFlag {
 						if !textContained(newPrimerFlag.reverse[i].Sequences, text(sequence)) {
 							newPrimerFlag.reverse[i].Sequences = append(newPrimerFlag.reverse[i].Sequences, text(sequence))
 						}
 					}
 				}
 				continue
-			}else{
+			} else {
 				regexList = getAllRegexStr(string(sequence), maxMismatchFlag)
 				seqToRegexMap[string(sequence)] = regexList
 				for _, sequence := range seqToRegexMap[string(sequence)] {
-					if strings.Count(sequence,"{") <= maxMismatchFlag {
+					if strings.Count(sequence, "{") <= maxMismatchFlag {
 						if !textContained(newPrimerFlag.reverse[i].Sequences, text(sequence)) {
 							newPrimerFlag.reverse[i].Sequences = append(newPrimerFlag.reverse[i].Sequences, text(sequence))
 						}
@@ -304,18 +351,18 @@ func main() {
 			var regexList []string
 			if _, ok := seqToRegexMap[string(sequence)]; ok {
 				for _, sequence := range seqToRegexMap[string(sequence)] {
-					if strings.Count(sequence,"{") <= maxMismatchFlag {
+					if strings.Count(sequence, "{") <= maxMismatchFlag {
 						if !textContained(newPrimerFlag.reverse[i].RcSequences, text(sequence)) {
 							newPrimerFlag.reverse[i].RcSequences = append(newPrimerFlag.reverse[i].RcSequences, text(sequence))
 						}
 					}
 				}
 				continue
-			}else{
+			} else {
 				regexList = getAllRegexStr(string(sequence), maxMismatchFlag)
 				seqToRegexMap[string(sequence)] = regexList
 				for _, sequence := range seqToRegexMap[string(sequence)] {
-					if strings.Count(sequence,"{") <= maxMismatchFlag {
+					if strings.Count(sequence, "{") <= maxMismatchFlag {
 						if !textContained(newPrimerFlag.reverse[i].RcSequences, text(sequence)) {
 							newPrimerFlag.reverse[i].RcSequences = append(newPrimerFlag.reverse[i].RcSequences, text(sequence))
 						}
@@ -324,20 +371,46 @@ func main() {
 			}
 		}
 	}
+	if debugFlag {
+		log.Println("Reverse regex done: ", duration)
+	}
+
+	if debugFlag {
+		log.Println("Now saving regex to json: ", duration)
+	}
 
 	primersFlag = newPrimerFlag
 
 	jsonStr, jsonErr := json.Marshal(seqToRegexMap)
 	if jsonErr != nil {
-			fmt.Printf("Error: %s", jsonErr.Error())
+		fmt.Printf("Error: %s", jsonErr.Error())
 	} else {
-			_ = ioutil.WriteFile(regexJsonFileFlag, []byte(jsonStr), 0644)
+		_ = ioutil.WriteFile(regexJsonFileFlag, []byte(jsonStr), 0644)
 	}
 
+	if debugFlag {
+		log.Println("End of regex construction and saving: ", duration)
+	}
+
+	if debugFlag {
+		log.Println("Begin matching check: ", duration)
+		log.Println("# of workers: ", searchWorkersFlag)
+	}
 	go matchWorkers(matchChan, indexChan, probeFlag, primersFlag, int(searchWorkersFlag))
+	if debugFlag {
+		log.Println("End of matches check: ", duration)
+	}
+
+	if debugFlag {
+		log.Println("Now writing output: ", duration)
+	}
 
 	bw := bufio.NewWriter(os.Stdout)
 	defer bw.Flush()
+
+	if debugFlag {
+		log.Println("Type Flag: ", typeFlag)
+	}
 
 	switch typeFlag {
 	case "allele":
@@ -347,7 +420,9 @@ func main() {
 	default:
 		fatalf("type flag value must be either allele or stat\n")
 	}
-	//fmt.Printf("ViPR Finished!")
+	if debugFlag {
+		log.Println("Main of Vipr Finished: ", duration)
+	}
 }
 
 func writeMatchMatrix(w io.Writer, matchChan chan ContigMatch, primers PrimerList, minLen, maxLen int) {
@@ -489,7 +564,7 @@ func writeMatches(w io.Writer, matchChan chan ContigMatch, minLen, maxLen int) {
 								forwardPrimerActuals = append(forwardPrimerActuals, tempStr)
 							}
 						}
-						if (end-start) < 1001 {
+						if (end - start) < 1001 {
 							fmt.Fprintf(w, "MATCHES\t%d\t%d\n", forwardPrimerActuals, reversePrimerActuals)
 							fmt.Fprintf(w, "+\t%s\t%s\t%s\t%d\t%d\t%d\t%s\t%s\n\n", fwd.primer.Label, rev.primer.Label, match.contig.sequence[start:end], start, end, end-start, filename, contigIdentifier)
 						}
@@ -528,7 +603,7 @@ func writeMatches(w io.Writer, matchChan chan ContigMatch, minLen, maxLen int) {
 								forwardPrimerActuals = append(forwardPrimerActuals, tempStr)
 							}
 						}
-						if (end-start) < 1001 {
+						if (end - start) < 1001 {
 							fmt.Fprintf(w, "MATCHES\t%d\t%d\n", forwardPrimerActuals, reversePrimerActuals)
 							rcSequence := reverseComplement(match.contig.sequence[start:end])
 							fmt.Fprintf(w, "-\t%s\t%s\t%s\t%d\t%d\t%d\t%s\t%s\n\n", fwd.primer.Label, rev.primer.Label, rcSequence, start, end, end-start, filename, contigIdentifier)
@@ -604,10 +679,10 @@ type PrimerMatch struct {
 	primer Primer
 	//indices   map[int]struct{}
 	//rcIndices map[int]struct{}
-	indices    			[]int
-	matchRegex 			map[int][]string
-	rcIndices  			[]int
-	rMatchRegex 		map[int][]string
+	indices         []int
+	matchRegex      map[int][]string
+	rcIndices       []int
+	rMatchRegex     map[int][]string
 	regexStartToEnd map[string][]int
 }
 
@@ -694,18 +769,18 @@ func (c ContigMatch) String() string {
 
 func getComboList(list_length int) []string {
 	if list_length == 1 {
-		comboList := []string{"R","I"}
+		comboList := []string{"R", "I"}
 		return comboList
 	}
 	comboList := []string{}
-	for _,comboStr := range getComboList(list_length-1) {
-		comboList = append(comboList,"R"+comboStr)
-		comboList = append(comboList,"I"+comboStr)
+	for _, comboStr := range getComboList(list_length - 1) {
+		comboList = append(comboList, "R"+comboStr)
+		comboList = append(comboList, "I"+comboStr)
 	}
 	return comboList
 }
 
-//This function generates all possible mismatch regex for a given seq deterined by the max-mismatch flag
+// This function generates all possible mismatch regex for a given seq deterined by the max-mismatch flag
 func getAllRegexStr(sequence string, max_mismatch int) []string {
 	var regList []string
 	var indexList []int
@@ -713,62 +788,61 @@ func getAllRegexStr(sequence string, max_mismatch int) []string {
 	deleteByteArr := ".{0,1}" //nothing or 1 anything
 	insertByteArr := ".{1,1}"
 	startCount := 1
-	indexList = append(indexList,startCount)
+	indexList = append(indexList, startCount)
 	//Deletion/Replacment mutation regex list
 	for len(indexList) <= max_mismatch && len(indexList) <= len(sequence) {
-		for _,comboStr := range regexByteArrComboList {
+		for _, comboStr := range regexByteArrComboList {
 			regexByteArrCombo := sequence
 			offset := 0
 			for indexInd := 0; indexInd < len(indexList); indexInd++ {
 				if comboStr[indexInd] == 'R' {
 					//deletion/replacement
-					indexVal := indexList[indexInd]-1 + indexInd*(len(deleteByteArr)-1) + indexInd*offset
+					indexVal := indexList[indexInd] - 1 + indexInd*(len(deleteByteArr)-1) + indexInd*offset
 					if indexVal >= len(regexByteArrCombo) {
-						regexByteArrCombo = regexByteArrCombo+insertByteArr //Insert at end caps equivalent to replace but with no deletion allowed
+						regexByteArrCombo = regexByteArrCombo + insertByteArr //Insert at end caps equivalent to replace but with no deletion allowed
 						break
 					}
 					//Ensure that replacement only for starting index as deletion can lead to weird/useless extra data
 					if indexVal == 0 || indexVal+1 == len(regexByteArrCombo) {
-						regexByteArrCombo = regexByteArrCombo[0:indexVal]+insertByteArr+regexByteArrCombo[indexVal+1:len(regexByteArrCombo)]
-					}else{
-						regexByteArrCombo = regexByteArrCombo[0:indexVal]+deleteByteArr+regexByteArrCombo[indexVal+1:len(regexByteArrCombo)]
+						regexByteArrCombo = regexByteArrCombo[0:indexVal] + insertByteArr + regexByteArrCombo[indexVal+1:len(regexByteArrCombo)]
+					} else {
+						regexByteArrCombo = regexByteArrCombo[0:indexVal] + deleteByteArr + regexByteArrCombo[indexVal+1:len(regexByteArrCombo)]
 					}
 				}
 				if comboStr[indexInd] == 'I' {
 					//Insertion
 					indexVal := indexList[indexInd] + indexInd*len(insertByteArr)
 					if indexVal < len(regexByteArrCombo) {
-						regexByteArrCombo = regexByteArrCombo[0:indexVal]+ insertByteArr+ regexByteArrCombo[indexVal:len(regexByteArrCombo)]
+						regexByteArrCombo = regexByteArrCombo[0:indexVal] + insertByteArr + regexByteArrCombo[indexVal:len(regexByteArrCombo)]
 					}
 					//Adds a character that will need to get accounted for
 					offset = offset + 1
 				}
 			}
 			if regexByteArrCombo != sequence {
-				if !strContained(regList,regexByteArrCombo ) {
+				if !strContained(regList, regexByteArrCombo) {
 					regList = append(regList, regexByteArrCombo)
 				}
 			}
 		}
 
-
 		increase := true
-		for indexInc := len(indexList)-1; indexInc >= 0; indexInc-- {
+		for indexInc := len(indexList) - 1; indexInc >= 0; indexInc-- {
 			if increase {
-				indexList[indexInc] = indexList[indexInc]+1
+				indexList[indexInc] = indexList[indexInc] + 1
 			}
 			if indexList[indexInc] <= len(sequence) {
 				increase = false
-				break;
-			}else{
+				break
+			} else {
 				startCount = startCount + 1
 				indexList[indexInc] = startCount + indexInc
 			}
 		}
 		if increase {
 			startCount = 1
-			indexList = append(indexList,0)
-			for indexInd,_ := range indexList {
+			indexList = append(indexList, 0)
+			for indexInd, _ := range indexList {
 				indexList[indexInd] = startCount + indexInd
 			}
 		}
@@ -784,11 +858,11 @@ func (m *ContigMatch) addPrimer(primer Primer, isForward bool) bool {
 		primer: primer,
 		//indices:   make(map[int]struct{}),
 		//rcIndices: make(map[int]struct{}),
-		indices:   []int{},
-		matchRegex:   make(map[int][]string),
-		rcIndices: []int{},
-		rMatchRegex:   make(map[int][]string),
-		regexStartToEnd:   make(map[string][]int),
+		indices:         []int{},
+		matchRegex:      make(map[int][]string),
+		rcIndices:       []int{},
+		rMatchRegex:     make(map[int][]string),
+		regexStartToEnd: make(map[string][]int),
 	}
 
 	for _, sequence := range primer.Sequences {
